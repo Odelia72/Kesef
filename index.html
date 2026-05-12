@@ -82,6 +82,7 @@
     const AlertTriangle = (p) => <Icon {...p}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></Icon>;
     const Gift = (p) => <Icon {...p}><polyline points="20 12 20 22 4 22 4 12"/><rect x="2" y="7" width="20" height="5"/><line x1="12" y1="22" x2="12" y2="7"/><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/></Icon>;
     const TrendingUp = (p) => <Icon {...p}><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></Icon>;
+    const Calendar = (p) => <Icon {...p}><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></Icon>;
 
     // ===== Constants =====
     const DEFAULT_CATEGORIES = ['אוכל', 'תרופות', 'ביטוחים', 'דלק ותחבורה', 'חשבונות', 'בילויים', 'ביגוד', 'בית', 'מתנות', 'אחר'];
@@ -119,10 +120,13 @@
       const [showAddModal, setShowAddModal] = useState(false);
       const [editingExpense, setEditingExpense] = useState(null);
       const [editingIncome, setEditingIncome] = useState(null);
+      const [editingPlanned, setEditingPlanned] = useState(null);
+      const [confirmingPlanned, setConfirmingPlanned] = useState(null);
+      const [displayedMonthKey, setDisplayedMonthKey] = useState(getMonthKey(new Date()));
       const [data, setData] = useState({
         budget: DEFAULT_BUDGET, categories: DEFAULT_CATEGORIES,
         expenses: [], fixedExpenses: [], installments: [], paidFixed: {},
-        incomes: [],
+        incomes: [], plannedExpenses: [],
       });
 
       useEffect(() => {
@@ -138,6 +142,7 @@
               installments: parsed.installments ?? [],
               paidFixed: parsed.paidFixed ?? {},
               incomes: parsed.incomes ?? [],
+              plannedExpenses: parsed.plannedExpenses ?? [],
             });
           }
         } catch (e) { console.error(e); }
@@ -156,6 +161,23 @@
       const addIncome = (inc) => save({ ...data, incomes: [...(data.incomes || []), { id: Date.now().toString() + Math.random(), ...inc }] });
       const updateIncome = (id, updates) => save({ ...data, incomes: (data.incomes || []).map(i => i.id === id ? { ...i, ...updates } : i) });
       const deleteIncome = (id) => save({ ...data, incomes: (data.incomes || []).filter(i => i.id !== id) });
+      const addPlanned = (p) => save({ ...data, plannedExpenses: [...(data.plannedExpenses || []), { id: Date.now().toString() + Math.random(), ...p }] });
+      const updatePlanned = (id, updates) => save({ ...data, plannedExpenses: (data.plannedExpenses || []).map(p => p.id === id ? { ...p, ...updates } : p) });
+      const deletePlanned = (id) => save({ ...data, plannedExpenses: (data.plannedExpenses || []).filter(p => p.id !== id) });
+      const confirmPlannedDone = (plannedId, date, paymentMethod) => {
+        const planned = (data.plannedExpenses || []).find(p => p.id === plannedId);
+        if (!planned) return;
+        const newExpense = {
+          id: Date.now().toString() + Math.random(),
+          supplier: planned.supplier, amount: planned.amount, category: planned.category,
+          paymentMethod, date, note: planned.note,
+        };
+        save({
+          ...data,
+          expenses: [...data.expenses, newExpense],
+          plannedExpenses: (data.plannedExpenses || []).filter(p => p.id !== plannedId),
+        });
+      };
       const togglePaidFixed = (fixedId, mk) => {
         const paid = data.paidFixed?.[mk] || [];
         const newPaid = paid.includes(fixedId) ? paid.filter(id => id !== fixedId) : [...paid, fixedId];
@@ -164,38 +186,67 @@
 
       const now = new Date();
       const currentMonthKey = getMonthKey(now);
-      const currentMonthExpenses = data.expenses.filter(e => e.date.startsWith(currentMonthKey));
-      const currentMonthIncomes = (data.incomes || []).filter(i => i.date.startsWith(currentMonthKey));
-      const monthlyVariable = currentMonthExpenses.reduce((s, e) => s + Number(e.amount), 0);
-      const monthlyFixed = data.fixedExpenses.reduce((s, e) => s + Number(e.amount), 0);
-      const monthlyIncome = currentMonthIncomes.reduce((s, i) => s + Number(i.amount), 0);
-      const monthlyInstallments = data.installments
-        .filter(i => isInstallmentActiveInMonth(i, currentMonthKey))
+      const displayedMonthExpenses = data.expenses.filter(e => e.date.startsWith(displayedMonthKey));
+      const displayedMonthIncomes = (data.incomes || []).filter(i => i.date.startsWith(displayedMonthKey));
+      const displayedMonthVariable = displayedMonthExpenses.reduce((s, e) => s + Number(e.amount), 0);
+      const displayedMonthIncome = displayedMonthIncomes.reduce((s, i) => s + Number(i.amount), 0);
+      const displayedMonthFixed = data.fixedExpenses.reduce((s, e) => s + Number(e.amount), 0);
+      const displayedMonthInstallments = data.installments
+        .filter(i => isInstallmentActiveInMonth(i, displayedMonthKey))
         .reduce((s, i) => s + Number(i.amount), 0);
-      const totalSpent = monthlyVariable + monthlyFixed + monthlyInstallments;
-      const balance = data.budget - totalSpent + monthlyIncome;
+      // Planned expenses: show in displayedMonth if estimatedDate matches OR (displayed is current AND date is empty)
+      const displayedMonthPlanned = (data.plannedExpenses || []).filter(p => {
+        if (p.estimatedDate) return p.estimatedDate.startsWith(displayedMonthKey);
+        return displayedMonthKey === currentMonthKey;
+      });
+      const displayedMonthPlannedTotal = displayedMonthPlanned.reduce((s, p) => s + Number(p.amount), 0);
+      const displayedMonthTotalSpent = displayedMonthVariable + displayedMonthFixed + displayedMonthInstallments;
+      const displayedMonthBalance = data.budget - displayedMonthTotalSpent + displayedMonthIncome;
+      const displayedMonthProjectedBalance = displayedMonthBalance - displayedMonthPlannedTotal;
 
       if (!loaded) return <div className="min-h-screen flex items-center justify-center text-blue-700">טוען...</div>;
 
-      const closeModal = () => { setShowAddModal(false); setEditingExpense(null); setEditingIncome(null); };
+      const closeModal = () => { setShowAddModal(false); setEditingExpense(null); setEditingIncome(null); setEditingPlanned(null); };
+
+      const goToPrevMonth = () => {
+        const [y, m] = displayedMonthKey.split('-').map(Number);
+        const d = new Date(y, m - 2, 1);
+        setDisplayedMonthKey(getMonthKey(d));
+      };
+      const goToNextMonth = () => {
+        const [y, m] = displayedMonthKey.split('-').map(Number);
+        const d = new Date(y, m, 1);
+        setDisplayedMonthKey(getMonthKey(d));
+      };
+      const goToCurrentMonth = () => setDisplayedMonthKey(currentMonthKey);
 
       return (
         <div dir="rtl" className="min-h-screen pb-24">
           <div className="max-w-2xl mx-auto px-4 py-6">
-            {view === 'home' && <HomeView data={data} balance={balance} totalSpent={totalSpent} monthlyIncome={monthlyIncome} currentMonthKey={currentMonthKey} currentMonthExpenses={currentMonthExpenses} currentMonthIncomes={currentMonthIncomes}
-              onEdit={(e) => { setEditingExpense(e); setEditingIncome(null); setShowAddModal(true); }}
-              onEditIncome={(i) => { setEditingIncome(i); setEditingExpense(null); setShowAddModal(true); }}
-              onDelete={deleteExpense} onDeleteIncome={deleteIncome} onTogglePaid={togglePaidFixed} />}
+            {view === 'home' && <HomeView data={data}
+              displayedMonthKey={displayedMonthKey} currentMonthKey={currentMonthKey}
+              balance={displayedMonthBalance} totalSpent={displayedMonthTotalSpent}
+              monthlyIncome={displayedMonthIncome} plannedTotal={displayedMonthPlannedTotal}
+              projectedBalance={displayedMonthProjectedBalance}
+              displayedMonthExpenses={displayedMonthExpenses} displayedMonthIncomes={displayedMonthIncomes}
+              displayedMonthPlanned={displayedMonthPlanned}
+              onPrevMonth={goToPrevMonth} onNextMonth={goToNextMonth} onCurrentMonth={goToCurrentMonth}
+              onEdit={(e) => { setEditingExpense(e); setEditingIncome(null); setEditingPlanned(null); setShowAddModal(true); }}
+              onEditIncome={(i) => { setEditingIncome(i); setEditingExpense(null); setEditingPlanned(null); setShowAddModal(true); }}
+              onEditPlanned={(p) => { setEditingPlanned(p); setEditingExpense(null); setEditingIncome(null); setShowAddModal(true); }}
+              onDelete={deleteExpense} onDeleteIncome={deleteIncome} onDeletePlanned={deletePlanned}
+              onConfirmPlanned={(p) => setConfirmingPlanned(p)}
+              onTogglePaid={togglePaidFixed} />}
             {view === 'stats' && <StatsView data={data} />}
             {view === 'settings' && <SettingsView data={data} save={save} />}
           </div>
 
           <nav className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-md border-t border-blue-100/70 shadow-lg">
             <div className="max-w-2xl mx-auto flex items-center justify-around py-2 px-4 relative">
-              <NavButton icon={<Home className="w-5 h-5" />} label="בית" active={view === 'home'} onClick={() => setView('home')} />
+              <NavButton icon={<Home className="w-5 h-5" />} label="בית" active={view === 'home'} onClick={() => { setView('home'); goToCurrentMonth(); }} />
               <NavButton icon={<BarChart3 className="w-5 h-5" />} label="נתונים" active={view === 'stats'} onClick={() => setView('stats')} />
               <NavButton icon={<Settings className="w-5 h-5" />} label="הגדרות" active={view === 'settings'} onClick={() => setView('settings')} />
-              <button onClick={() => { setEditingExpense(null); setEditingIncome(null); setShowAddModal(true); }}
+              <button onClick={() => { setEditingExpense(null); setEditingIncome(null); setEditingPlanned(null); setShowAddModal(true); }}
                 className="absolute left-1/2 -translate-x-1/2 -top-6 w-14 h-14 rounded-full bg-blue-600 text-white shadow-lg flex items-center justify-center hover:bg-blue-700 active:scale-95 transition-all ring-4 ring-blue-50">
                 <Plus className="w-7 h-7" strokeWidth={2.5} />
               </button>
@@ -203,10 +254,17 @@
           </nav>
 
           {showAddModal && (
-            <TransactionModal categories={data.categories} expense={editingExpense} income={editingIncome}
+            <TransactionModal categories={data.categories} expense={editingExpense} income={editingIncome} planned={editingPlanned}
               onSaveExpense={(exp) => { editingExpense ? updateExpense(editingExpense.id, exp) : addExpense(exp); closeModal(); }}
               onSaveIncome={(inc) => { editingIncome ? updateIncome(editingIncome.id, inc) : addIncome(inc); closeModal(); }}
+              onSavePlanned={(p) => { editingPlanned ? updatePlanned(editingPlanned.id, p) : addPlanned(p); closeModal(); }}
               onClose={closeModal} />
+          )}
+
+          {confirmingPlanned && (
+            <ConfirmPlannedDoneModal planned={confirmingPlanned}
+              onConfirm={(date, paymentMethod) => { confirmPlannedDone(confirmingPlanned.id, date, paymentMethod); setConfirmingPlanned(null); }}
+              onClose={() => setConfirmingPlanned(null)} />
           )}
         </div>
       );
@@ -220,86 +278,160 @@
       );
     }
 
-    function HomeView({ data, balance, totalSpent, monthlyIncome, currentMonthKey, currentMonthExpenses, currentMonthIncomes, onEdit, onEditIncome, onDelete, onDeleteIncome, onTogglePaid }) {
-      const now = new Date();
+    function HomeView({ data, displayedMonthKey, currentMonthKey, balance, totalSpent, monthlyIncome, plannedTotal, projectedBalance,
+                         displayedMonthExpenses, displayedMonthIncomes, displayedMonthPlanned,
+                         onPrevMonth, onNextMonth, onCurrentMonth,
+                         onEdit, onEditIncome, onEditPlanned, onDelete, onDeleteIncome, onDeletePlanned, onConfirmPlanned, onTogglePaid }) {
       const balancePositive = balance >= 0;
+      const isCurrent = displayedMonthKey === currentMonthKey;
+      const [year, monthNum] = displayedMonthKey.split('-').map(Number);
+      const monthName = hebrewMonths[monthNum - 1];
+      const isFuture = displayedMonthKey > currentMonthKey;
+      const isPast = displayedMonthKey < currentMonthKey;
       const progressPercent = Math.min((totalSpent / data.budget) * 100, 100);
-      const paidThisMonth = data.paidFixed?.[currentMonthKey] || [];
+      const paidThisMonth = data.paidFixed?.[displayedMonthKey] || [];
+
+      // Swipe gesture handling
+      const touchStart = React.useRef(null);
+      const handleTouchStart = (e) => { touchStart.current = e.touches[0].clientX; };
+      const handleTouchEnd = (e) => {
+        if (touchStart.current === null) return;
+        const diff = e.changedTouches[0].clientX - touchStart.current;
+        if (Math.abs(diff) > 60) {
+          // RTL: swipe right (positive diff) goes to next month, swipe left to previous
+          if (diff > 0) onNextMonth(); else onPrevMonth();
+        }
+        touchStart.current = null;
+      };
 
       const fixedItems = data.fixedExpenses.map(f => ({
         id: 'fixed-' + f.id, fixedId: f.id, supplier: f.name, amount: f.amount, category: f.category,
-        paymentMethod: f.paymentMethod || 'credit', date: currentMonthKey + '-01', note: f.note,
+        paymentMethod: f.paymentMethod || 'credit', date: displayedMonthKey + '-01', note: f.note,
         isFixed: true, requiresConfirmation: f.requiresConfirmation,
         isPaid: !f.requiresConfirmation || paidThisMonth.includes(f.id),
       }));
 
-      const activeInstallments = data.installments.filter(i => isInstallmentActiveInMonth(i, currentMonthKey)).map(i => ({
+      const activeInstallments = data.installments.filter(i => isInstallmentActiveInMonth(i, displayedMonthKey)).map(i => ({
         id: 'installment-' + i.id, supplier: i.name, amount: i.amount, category: i.category,
-        paymentMethod: 'credit', date: currentMonthKey + '-01', note: i.note, isInstallment: true,
-        installmentNumber: getInstallmentNumber(i, currentMonthKey), totalPayments: i.totalPayments,
+        paymentMethod: 'credit', date: displayedMonthKey + '-01', note: i.note, isInstallment: true,
+        installmentNumber: getInstallmentNumber(i, displayedMonthKey), totalPayments: i.totalPayments,
       }));
 
-      const incomeItems = (currentMonthIncomes || []).map(inc => ({
+      const incomeItems = (displayedMonthIncomes || []).map(inc => ({
         id: 'income-' + inc.id, incomeId: inc.id, supplier: inc.description, amount: inc.amount,
         date: inc.date, isIncome: true,
       }));
 
-      const allMonth = [...currentMonthExpenses, ...fixedItems, ...activeInstallments, ...incomeItems].sort((a, b) => b.date.localeCompare(a.date));
+      const plannedItems = (displayedMonthPlanned || []).map(p => ({
+        id: 'planned-' + p.id, plannedId: p.id, supplier: p.supplier, amount: p.amount, category: p.category,
+        date: p.estimatedDate || (displayedMonthKey + '-01'), note: p.note, isPlanned: true,
+        rawPlanned: p,
+      }));
+
+      const allMonth = [...displayedMonthExpenses, ...fixedItems, ...activeInstallments, ...incomeItems, ...plannedItems].sort((a, b) => b.date.localeCompare(a.date));
+
+      const bigNumber = isCurrent ? balance : projectedBalance;
+      const bigNumberLabel = isCurrent ? 'יתרה לחודש' : isFuture ? 'יתרה צפויה לחודש' : 'יתרה בסוף החודש';
 
       return (
         <>
-          <div className="text-center mb-6">
-            <h1 className="text-3xl font-bold text-slate-800 mb-1">מעקב הוצאות</h1>
-            <p className="text-sm text-slate-500">{hebrewMonths[now.getMonth()]} {now.getFullYear()}</p>
-          </div>
-
-          <div className="rounded-3xl p-6 text-white shadow-xl mb-6" style={{ background: 'linear-gradient(135deg, #2563eb 0%, #4f46e5 100%)' }}>
-            <p className="text-sm text-blue-100 mb-1">יתרה לחודש</p>
-            <div className="flex items-baseline gap-2 mb-3 flex-wrap">
-              <span className={`text-4xl font-bold ${balancePositive ? '' : 'text-rose-100'}`}>{formatCurrency(balance)}</span>
-              {!balancePositive && <span className="text-rose-100 text-sm font-medium">חריגה מהתקציב</span>}
+          <div className="text-center mb-4">
+            <h1 className="text-3xl font-bold text-slate-800 mb-2">מעקב הוצאות</h1>
+            <div className="inline-flex items-center gap-1 bg-white/60 backdrop-blur rounded-full px-1 py-1 border border-slate-200/50">
+              <button onClick={onPrevMonth} className="p-1.5 hover:bg-slate-100 rounded-full text-slate-600" aria-label="חודש קודם"><ChevronRight className="w-4 h-4" /></button>
+              <span className="text-sm font-medium text-slate-700 min-w-[110px] text-center">{monthName} {year}</span>
+              <button onClick={onNextMonth} className="p-1.5 hover:bg-slate-100 rounded-full text-slate-600" aria-label="חודש הבא"><ChevronLeft className="w-4 h-4" /></button>
             </div>
-            <div className="text-xs text-blue-100 mb-1">הוצאת {formatCurrency(totalSpent)} מתוך {formatCurrency(data.budget)}</div>
-            {monthlyIncome > 0 && (
-              <div className="text-xs text-emerald-200 mb-2 flex items-center gap-1">
-                <TrendingUp className="w-3 h-3" />
-                <span>נכנס החודש: {formatCurrency(monthlyIncome)}</span>
+            {!isCurrent && (
+              <div className="mt-2">
+                <button onClick={onCurrentMonth} className="text-xs text-blue-600 hover:text-blue-800 font-medium">חזרה לחודש הנוכחי ←</button>
               </div>
             )}
-            <div className="w-full h-2 bg-blue-900/30 rounded-full overflow-hidden mt-1">
-              <div className={`h-full transition-all ${balancePositive ? 'bg-white' : 'bg-rose-300'}`} style={{ width: `${progressPercent}%` }} />
-            </div>
           </div>
 
-          <div className="bg-white/80 backdrop-blur rounded-3xl p-5 shadow-sm border border-slate-200/50">
-            <h2 className="text-lg font-bold text-slate-800 mb-3">פעולות החודש</h2>
-            {allMonth.length === 0 ? (
-              <p className="text-center text-slate-400 py-8">אין עדיין פעולות החודש</p>
-            ) : (
-              <div className="space-y-2">
-                {allMonth.map(exp => (
-                  <ExpenseRow key={exp.id} expense={exp}
-                    onEdit={exp.isIncome ? () => onEditIncome({ id: exp.incomeId, amount: exp.amount, description: exp.supplier, date: exp.date }) : (exp.isFixed || exp.isInstallment) ? null : () => onEdit(exp)}
-                    onDelete={exp.isIncome ? () => onDeleteIncome(exp.incomeId) : (exp.isFixed || exp.isInstallment) ? null : () => onDelete(exp.id)}
-                    onTogglePaid={exp.isFixed && exp.requiresConfirmation ? () => onTogglePaid(exp.fixedId, currentMonthKey) : null} />
-                ))}
+          <div onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
+            <div className={`rounded-3xl p-6 text-white shadow-xl mb-6 ${isFuture ? 'opacity-95' : ''}`} style={{ background: isFuture ? 'linear-gradient(135deg, #475569 0%, #334155 100%)' : isPast ? 'linear-gradient(135deg, #64748b 0%, #475569 100%)' : 'linear-gradient(135deg, #2563eb 0%, #4f46e5 100%)' }}>
+              <p className="text-sm mb-1 opacity-80">{bigNumberLabel}</p>
+              <div className="flex items-baseline gap-2 mb-3 flex-wrap">
+                <span className={`text-4xl font-bold ${(isCurrent ? balancePositive : projectedBalance >= 0) ? '' : 'text-rose-100'}`}>{formatCurrency(bigNumber)}</span>
+                {isCurrent && !balancePositive && <span className="text-rose-100 text-sm font-medium">חריגה מהתקציב</span>}
+                {isFuture && <span className="text-xs font-medium opacity-80 bg-white/15 px-2 py-0.5 rounded-full">צפי</span>}
               </div>
-            )}
+              <div className="space-y-1 mb-2">
+                <div className="flex items-center justify-between text-xs opacity-85">
+                  <span>הוצאת</span>
+                  <span className="font-medium">{formatCurrency(totalSpent)} מתוך {formatCurrency(data.budget)}</span>
+                </div>
+                {monthlyIncome > 0 && (
+                  <div className="flex items-center justify-between text-xs text-emerald-200">
+                    <span className="flex items-center gap-1"><TrendingUp className="w-3 h-3" />נכנס החודש</span>
+                    <span className="font-medium">+{formatCurrency(monthlyIncome)}</span>
+                  </div>
+                )}
+                {plannedTotal > 0 && (
+                  <div className="flex items-center justify-between text-xs opacity-85 pt-1 border-t border-white/20">
+                    <span>צפויה לי</span>
+                    <span className="font-medium">{formatCurrency(plannedTotal)}</span>
+                  </div>
+                )}
+                {plannedTotal > 0 && isCurrent && (
+                  <div className="flex items-center justify-between text-sm pt-1">
+                    <span className="font-medium">יתרה צפויה בסוף החודש</span>
+                    <span className={`font-bold ${projectedBalance >= 0 ? '' : 'text-rose-100'}`}>{formatCurrency(projectedBalance)}</span>
+                  </div>
+                )}
+              </div>
+              <div className="w-full h-2 bg-black/20 rounded-full overflow-hidden mt-2">
+                <div className={`h-full transition-all ${(isCurrent ? balancePositive : true) ? 'bg-white' : 'bg-rose-300'}`} style={{ width: `${progressPercent}%` }} />
+              </div>
+            </div>
+
+            <div className="bg-white/80 backdrop-blur rounded-3xl p-5 shadow-sm border border-slate-200/50">
+              <h2 className="text-lg font-bold text-slate-800 mb-3">פעולות {isCurrent ? 'החודש' : `ב${monthName}`}</h2>
+              {allMonth.length === 0 ? (
+                <p className="text-center text-slate-400 py-8">אין פעולות בחודש זה</p>
+              ) : (
+                <div className="space-y-2">
+                  {allMonth.map(exp => (
+                    <ExpenseRow key={exp.id} expense={exp}
+                      onEdit={exp.isIncome ? () => onEditIncome({ id: exp.incomeId, amount: exp.amount, description: exp.supplier, date: exp.date })
+                        : exp.isPlanned ? () => onEditPlanned(exp.rawPlanned)
+                        : (exp.isFixed || exp.isInstallment) ? null : () => onEdit(exp)}
+                      onDelete={exp.isIncome ? () => onDeleteIncome(exp.incomeId)
+                        : exp.isPlanned ? () => onDeletePlanned(exp.plannedId)
+                        : (exp.isFixed || exp.isInstallment) ? null : () => onDelete(exp.id)}
+                      onConfirmPlanned={exp.isPlanned ? () => onConfirmPlanned(exp.rawPlanned) : null}
+                      onTogglePaid={exp.isFixed && exp.requiresConfirmation ? () => onTogglePaid(exp.fixedId, displayedMonthKey) : null} />
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </>
       );
     }
 
-    function ExpenseRow({ expense, onEdit, onDelete, onTogglePaid }) {
+    function ExpenseRow({ expense, onEdit, onDelete, onTogglePaid, onConfirmPlanned }) {
       const date = new Date(expense.date);
       const dayMonth = `${date.getDate()}/${date.getMonth() + 1}`;
       const PaymentIcon = expense.paymentMethod === 'cash' ? Wallet : CreditCard;
       const isPending = expense.isFixed && expense.requiresConfirmation && !expense.isPaid;
       const isIncome = expense.isIncome;
+      const isPlanned = expense.isPlanned;
+
+      const containerClasses = isPlanned
+        ? 'bg-slate-100/70 hover:bg-slate-100 border-2 border-dashed border-slate-300'
+        : isIncome
+          ? 'bg-emerald-50/70 hover:bg-emerald-50 border border-emerald-100'
+          : isPending
+            ? 'bg-slate-100/60 border border-dashed border-slate-300 hover:bg-slate-100'
+            : 'bg-slate-50 hover:bg-slate-100';
 
       const inner = (
-        <div className={`flex items-center gap-3 p-3 rounded-xl transition-colors group ${isIncome ? 'bg-emerald-50/70 hover:bg-emerald-50 border border-emerald-100' : isPending ? 'bg-slate-100/60 border border-dashed border-slate-300 hover:bg-slate-100' : 'bg-slate-50 hover:bg-slate-100'}`}>
-          {isIncome ? (
+        <div className={`flex items-center gap-3 p-3 rounded-xl transition-colors group ${containerClasses}`}>
+          {isPlanned ? (
+            <div className="bg-slate-200 text-slate-500 p-2 rounded-full"><Calendar className="w-4 h-4" /></div>
+          ) : isIncome ? (
             <div className="bg-emerald-100 text-emerald-600 p-2 rounded-full"><TrendingUp className="w-4 h-4" strokeWidth={2.5} /></div>
           ) : isPending ? (
             <div className="bg-white border-2 border-slate-300 p-1.5 rounded-full"><Circle className="w-4 h-4 text-slate-300" /></div>
@@ -315,7 +447,10 @@
           <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 min-w-0 flex-wrap">
-                <span className={`font-medium truncate ${isIncome ? 'text-emerald-800' : isPending ? 'text-slate-500' : 'text-slate-800'}`}>{expense.supplier}</span>
+                <span className={`font-medium truncate ${isPlanned ? 'text-slate-600' : isIncome ? 'text-emerald-800' : isPending ? 'text-slate-500' : 'text-slate-800'}`}>{expense.supplier}</span>
+                {isPlanned && (
+                  <span className="text-[10px] bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded-full flex-shrink-0">צפויה</span>
+                )}
                 {isIncome && (
                   <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full flex-shrink-0">הכנסה</span>
                 )}
@@ -328,18 +463,26 @@
                   <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full flex-shrink-0">תשלום {expense.installmentNumber}/{expense.totalPayments}</span>
                 )}
               </div>
-              <span className={`font-bold flex-shrink-0 ${isIncome ? 'text-emerald-700' : isPending ? 'text-slate-400' : 'text-slate-700'}`}>
+              <span className={`font-bold flex-shrink-0 ${isPlanned ? 'text-slate-600' : isIncome ? 'text-emerald-700' : isPending ? 'text-slate-400' : 'text-slate-700'}`}>
                 {isIncome ? '+' : ''}{formatCurrency(Number(expense.amount))}
               </span>
             </div>
-            <div className={`flex items-center justify-between text-xs ${isIncome ? 'text-emerald-700/70' : 'text-slate-500'}`}>
-              <span>{isIncome ? dayMonth : `${expense.category}${!expense.isFixed && !expense.isInstallment ? ` · ${dayMonth}` : ''}`}</span>
-              {(onEdit || onDelete) && (
-                <div className="flex items-center gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
-                  {onEdit && <button onClick={(e) => { e.stopPropagation(); onEdit(); }} className={`p-1 ${isIncome ? 'text-emerald-500 hover:text-emerald-700' : 'text-slate-400 hover:text-blue-600'}`}><Edit2 className="w-3.5 h-3.5" /></button>}
-                  {onDelete && <button onClick={(e) => { e.stopPropagation(); onDelete(); }} className="text-slate-400 hover:text-rose-600 p-1"><Trash2 className="w-3.5 h-3.5" /></button>}
-                </div>
-              )}
+            <div className={`flex items-center justify-between text-xs ${isPlanned ? 'text-slate-500' : isIncome ? 'text-emerald-700/70' : 'text-slate-500'}`}>
+              <span>{isIncome ? dayMonth : isPlanned ? (expense.category + (expense.rawPlanned?.estimatedDate ? ` · ${dayMonth}` : ' · ללא תאריך')) : `${expense.category}${!expense.isFixed && !expense.isInstallment ? ` · ${dayMonth}` : ''}`}</span>
+              <div className="flex items-center gap-1">
+                {isPlanned && onConfirmPlanned && (
+                  <button onClick={(e) => { e.stopPropagation(); onConfirmPlanned(); }}
+                    className="flex items-center gap-1 text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white px-2 py-1 rounded-full font-medium">
+                    <Check className="w-3 h-3" strokeWidth={3} /> בוצע
+                  </button>
+                )}
+                {(onEdit || onDelete) && (
+                  <div className="flex items-center gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
+                    {onEdit && <button onClick={(e) => { e.stopPropagation(); onEdit(); }} className={`p-1 ${isIncome ? 'text-emerald-500 hover:text-emerald-700' : 'text-slate-400 hover:text-blue-600'}`}><Edit2 className="w-3.5 h-3.5" /></button>}
+                    {onDelete && <button onClick={(e) => { e.stopPropagation(); onDelete(); }} className="text-slate-400 hover:text-rose-600 p-1"><Trash2 className="w-3.5 h-3.5" /></button>}
+                  </div>
+                )}
+              </div>
             </div>
             {expense.note && (
               <div className="flex items-start gap-1 mt-1 text-xs text-slate-500 italic">
@@ -355,18 +498,20 @@
       return inner;
     }
 
-    function TransactionModal({ categories, expense, income, onSaveExpense, onSaveIncome, onClose }) {
-      const isEditing = !!(expense || income);
+    function TransactionModal({ categories, expense, income, planned, onSaveExpense, onSaveIncome, onSavePlanned, onClose }) {
+      const isEditing = !!(expense || income || planned);
       const initialType = income ? 'income' : 'expense';
       const [type, setType] = useState(initialType);
+      const [isPlanned, setIsPlanned] = useState(!!planned);
 
-      // Expense fields
-      const [supplier, setSupplier] = useState(expense?.supplier || '');
-      const [amount, setAmount] = useState(expense?.amount || '');
-      const [category, setCategory] = useState(expense?.category || categories[0] || '');
+      // Expense / planned shared fields
+      const initialFromSource = expense || planned || null;
+      const [supplier, setSupplier] = useState(initialFromSource?.supplier || '');
+      const [amount, setAmount] = useState(initialFromSource?.amount || '');
+      const [category, setCategory] = useState(initialFromSource?.category || categories[0] || '');
       const [paymentMethod, setPaymentMethod] = useState(expense?.paymentMethod || 'credit');
-      const [date, setDate] = useState(expense?.date || formatDate(new Date()));
-      const [note, setNote] = useState(expense?.note || '');
+      const [date, setDate] = useState(expense?.date || planned?.estimatedDate || formatDate(new Date()));
+      const [note, setNote] = useState(initialFromSource?.note || '');
 
       // Income fields
       const [incomeAmount, setIncomeAmount] = useState(income?.amount || '');
@@ -377,17 +522,24 @@
       const canSaveIncome = incomeDescription.trim() && Number(incomeAmount) > 0;
 
       const handleSave = () => {
-        if (type === 'expense') {
-          if (!canSaveExpense) return;
-          onSaveExpense({ supplier: supplier.trim(), amount: Number(amount), category, paymentMethod, date, note: note.trim() || undefined });
-        } else {
+        if (type === 'income') {
           if (!canSaveIncome) return;
           onSaveIncome({ amount: Number(incomeAmount), description: incomeDescription.trim(), date: incomeDate });
+          return;
+        }
+        if (!canSaveExpense) return;
+        if (isPlanned) {
+          onSavePlanned({
+            supplier: supplier.trim(), amount: Number(amount), category,
+            estimatedDate: date || undefined, note: note.trim() || undefined,
+          });
+        } else {
+          onSaveExpense({ supplier: supplier.trim(), amount: Number(amount), category, paymentMethod, date, note: note.trim() || undefined });
         }
       };
 
       const title = isEditing
-        ? (type === 'expense' ? 'עריכת הוצאה' : 'עריכת הכנסה')
+        ? (planned ? 'עריכת הוצאה מתוכננת' : type === 'expense' ? 'עריכת הוצאה' : 'עריכת הכנסה')
         : 'פעולה חדשה';
 
       return (
@@ -414,8 +566,21 @@
 
             {type === 'expense' ? (
               <div className="space-y-4">
-                <Field label="ספק">
-                  <input type="text" value={supplier} onChange={(e) => setSupplier(e.target.value)} placeholder="אמזון, סופר פארם..."
+                {(!isEditing || planned) && (
+                  <button type="button" onClick={() => !planned && setIsPlanned(!isPlanned)}
+                    className={`w-full flex items-start gap-2.5 p-3 rounded-xl border text-right transition-colors ${isPlanned ? 'bg-slate-100 border-slate-400' : 'bg-white border-slate-200 hover:bg-slate-50'} ${planned ? 'opacity-100 cursor-default' : ''}`}>
+                    <div className={`flex-shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center mt-0.5 ${isPlanned ? 'bg-slate-600 border-slate-600' : 'bg-white border-slate-300'}`}>
+                      {isPlanned && <Check className="w-3 h-3 text-white" strokeWidth={3} />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className={`text-sm font-medium ${isPlanned ? 'text-slate-800' : 'text-slate-700'}`}>זו הוצאה מתוכננת (עוד לא בוצעה)</div>
+                      <div className="text-[11px] text-slate-500 leading-relaxed">תופיע ברשימה באפור עם כפתור ״בוצע״ כשתקרה</div>
+                    </div>
+                  </button>
+                )}
+
+                <Field label={isPlanned ? 'שם / הסבר' : 'ספק'}>
+                  <input type="text" value={supplier} onChange={(e) => setSupplier(e.target.value)} placeholder={isPlanned ? 'טיפול לאוטו, כסף זר לחו"ל...' : 'אמזון, סופר פארם...'}
                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400 text-slate-800" />
                 </Field>
                 <Field label="סכום">
@@ -435,24 +600,29 @@
                     <ChevronDown className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
                   </div>
                 </Field>
-                <Field label="אמצעי תשלום">
-                  <div className="grid grid-cols-2 gap-2">
-                    <button onClick={() => setPaymentMethod('credit')}
-                      className={`flex items-center justify-center gap-2 py-3 rounded-xl border ${paymentMethod === 'credit' ? 'bg-blue-50 border-blue-400 text-blue-700' : 'bg-slate-50 border-slate-200 text-slate-600'}`}>
-                      <CreditCard className="w-4 h-4" /><span className="text-sm font-medium">כרטיס אשראי</span>
-                    </button>
-                    <button onClick={() => setPaymentMethod('cash')}
-                      className={`flex items-center justify-center gap-2 py-3 rounded-xl border ${paymentMethod === 'cash' ? 'bg-blue-50 border-blue-400 text-blue-700' : 'bg-slate-50 border-slate-200 text-slate-600'}`}>
-                      <Wallet className="w-4 h-4" /><span className="text-sm font-medium">מזומן</span>
-                    </button>
-                  </div>
-                </Field>
-                <Field label="תאריך">
+                {!isPlanned && (
+                  <Field label="אמצעי תשלום">
+                    <div className="grid grid-cols-2 gap-2">
+                      <button onClick={() => setPaymentMethod('credit')}
+                        className={`flex items-center justify-center gap-2 py-3 rounded-xl border ${paymentMethod === 'credit' ? 'bg-blue-50 border-blue-400 text-blue-700' : 'bg-slate-50 border-slate-200 text-slate-600'}`}>
+                        <CreditCard className="w-4 h-4" /><span className="text-sm font-medium">כרטיס אשראי</span>
+                      </button>
+                      <button onClick={() => setPaymentMethod('cash')}
+                        className={`flex items-center justify-center gap-2 py-3 rounded-xl border ${paymentMethod === 'cash' ? 'bg-blue-50 border-blue-400 text-blue-700' : 'bg-slate-50 border-slate-200 text-slate-600'}`}>
+                        <Wallet className="w-4 h-4" /><span className="text-sm font-medium">מזומן</span>
+                      </button>
+                    </div>
+                  </Field>
+                )}
+                <Field label={isPlanned ? 'תאריך משוער (אופציונלי)' : 'תאריך'}>
                   <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400 text-slate-800" />
+                  {isPlanned && date && (
+                    <button type="button" onClick={() => setDate('')} className="text-[11px] text-slate-500 hover:text-slate-700 mt-1">נקה תאריך (לא יודעת מתי)</button>
+                  )}
                 </Field>
                 <Field label="הערה (אופציונלי)">
-                  <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="הקשר, החזר חלקי, מתנה למישהו..." rows="2"
+                  <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder={isPlanned ? 'פרטים על ההוצאה הצפויה...' : 'הקשר, החזר חלקי, מתנה למישהו...'} rows="2"
                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400 text-slate-800 resize-none" />
                 </Field>
               </div>
@@ -482,7 +652,56 @@
             <div className="grid grid-cols-2 gap-3 mt-6">
               <button onClick={onClose} className="py-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium">ביטול</button>
               <button disabled={type === 'expense' ? !canSaveExpense : !canSaveIncome} onClick={handleSave}
-                className={`py-3 rounded-xl text-white font-medium disabled:bg-slate-300 ${type === 'income' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-blue-600 hover:bg-blue-700'}`}>שמירה</button>
+                className={`py-3 rounded-xl text-white font-medium disabled:bg-slate-300 ${type === 'income' ? 'bg-emerald-600 hover:bg-emerald-700' : isPlanned ? 'bg-slate-600 hover:bg-slate-700' : 'bg-blue-600 hover:bg-blue-700'}`}>
+                {isPlanned ? (isEditing ? 'שמירה' : 'הוסף כמתוכננת') : 'שמירה'}
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function ConfirmPlannedDoneModal({ planned, onConfirm, onClose }) {
+      const [date, setDate] = useState(formatDate(new Date()));
+      const [paymentMethod, setPaymentMethod] = useState('credit');
+
+      return (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+          <div dir="rtl" className="bg-white w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl p-6 shadow-xl">
+            <div className="flex items-start gap-3 mb-4">
+              <div className="flex-shrink-0 w-10 h-10 bg-emerald-100 rounded-full flex items-center justify-center">
+                <Check className="w-5 h-5 text-emerald-600" strokeWidth={3} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="text-lg font-bold text-slate-800 mb-1">בוצע!</h3>
+                <p className="text-sm text-slate-600 truncate">{planned.supplier} · {formatCurrency(planned.amount)}</p>
+              </div>
+              <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-1"><X className="w-5 h-5" /></button>
+            </div>
+
+            <div className="space-y-4 mb-6">
+              <Field label="מתי קרה?">
+                <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
+                  className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-400 text-slate-800" />
+              </Field>
+              <Field label="אמצעי תשלום">
+                <div className="grid grid-cols-2 gap-2">
+                  <button onClick={() => setPaymentMethod('credit')}
+                    className={`flex items-center justify-center gap-2 py-3 rounded-xl border ${paymentMethod === 'credit' ? 'bg-emerald-50 border-emerald-400 text-emerald-700' : 'bg-slate-50 border-slate-200 text-slate-600'}`}>
+                    <CreditCard className="w-4 h-4" /><span className="text-sm font-medium">כרטיס אשראי</span>
+                  </button>
+                  <button onClick={() => setPaymentMethod('cash')}
+                    className={`flex items-center justify-center gap-2 py-3 rounded-xl border ${paymentMethod === 'cash' ? 'bg-emerald-50 border-emerald-400 text-emerald-700' : 'bg-slate-50 border-slate-200 text-slate-600'}`}>
+                    <Wallet className="w-4 h-4" /><span className="text-sm font-medium">מזומן</span>
+                  </button>
+                </div>
+              </Field>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <button onClick={onClose} className="py-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium">ביטול</button>
+              <button onClick={() => onConfirm(date, paymentMethod)}
+                className="py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-medium">אישור</button>
             </div>
           </div>
         </div>
@@ -758,11 +977,12 @@
             const fixedCount = Array.isArray(inner.fixedExpenses) ? inner.fixedExpenses.length : 0;
             const installmentsCount = Array.isArray(inner.installments) ? inner.installments.length : 0;
             const incomesCount = Array.isArray(inner.incomes) ? inner.incomes.length : 0;
+            const plannedCount = Array.isArray(inner.plannedExpenses) ? inner.plannedExpenses.length : 0;
             setPendingImport({
               parsed,
               fileName: file.name,
               exportedAt: parsed.exportedAt,
-              counts: { expenses: expensesCount, fixed: fixedCount, installments: installmentsCount, incomes: incomesCount },
+              counts: { expenses: expensesCount, fixed: fixedCount, installments: installmentsCount, incomes: incomesCount, planned: plannedCount },
             });
           } catch (err) {
             setImportError('הקובץ לא תקין: ' + (err?.message || 'שגיאה לא ידועה'));
@@ -783,6 +1003,7 @@
           installments: Array.isArray(imp.installments) ? imp.installments : [],
           paidFixed: (imp.paidFixed && typeof imp.paidFixed === 'object') ? imp.paidFixed : {},
           incomes: Array.isArray(imp.incomes) ? imp.incomes : [],
+          plannedExpenses: Array.isArray(imp.plannedExpenses) ? imp.plannedExpenses : [],
         });
         setPendingImport(null);
       };
@@ -1045,6 +1266,7 @@
                   <div className="flex justify-between"><span className="text-slate-500">הוצאות קבועות:</span><span className="text-slate-700 font-medium">{pendingImport.counts.fixed}</span></div>
                   <div className="flex justify-between"><span className="text-slate-500">תשלומים:</span><span className="text-slate-700 font-medium">{pendingImport.counts.installments}</span></div>
                   <div className="flex justify-between"><span className="text-slate-500">הכנסות:</span><span className="text-slate-700 font-medium">{pendingImport.counts.incomes || 0}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-500">הוצאות מתוכננות:</span><span className="text-slate-700 font-medium">{pendingImport.counts.planned || 0}</span></div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-2">
