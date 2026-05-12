@@ -713,6 +713,7 @@
     }
 
     function StatsView({ data }) {
+      const [subTab, setSubTab] = useState('stats');
       const now = new Date();
       const currentYear = now.getFullYear();
       const currentMonthKey = getMonthKey(now);
@@ -743,6 +744,21 @@
             <p className="text-sm text-slate-500">{currentYear}</p>
           </div>
 
+          <div className="grid grid-cols-2 gap-1 bg-slate-100 rounded-2xl p-1 mb-5">
+            <button onClick={() => setSubTab('stats')}
+              className={`flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-sm font-medium transition-all ${subTab === 'stats' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500'}`}>
+              <BarChart3 className="w-4 h-4" />
+              סטטיסטיקה
+            </button>
+            <button onClick={() => setSubTab('archive')}
+              className={`flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-sm font-medium transition-all ${subTab === 'archive' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500'}`}>
+              <Calendar className="w-4 h-4" />
+              ארכיון
+            </button>
+          </div>
+
+          {subTab === 'archive' ? <ArchiveView data={data} />
+          : (<>
           <div className="bg-white/80 backdrop-blur rounded-3xl p-5 shadow-sm border border-slate-200/50 mb-4">
             <h2 className="text-lg font-bold text-slate-800 mb-1">חלוקה לקטגוריות</h2>
             <p className="text-xs text-slate-500 mb-4">{hebrewMonths[now.getMonth()]}</p>
@@ -792,7 +808,124 @@
           </div>
 
           <QuarterlyReport data={data} />
+          </>)}
         </>
+      );
+    }
+
+    function ArchiveView({ data }) {
+      const now = new Date();
+      const currentYear = now.getFullYear();
+      const currentMonthKey = getMonthKey(now);
+      const [expandedMonths, setExpandedMonths] = useState({ [currentMonthKey]: true });
+
+      const toggleMonth = (mk) => setExpandedMonths(prev => ({ ...prev, [mk]: !prev[mk] }));
+
+      // Build a list of all months from earliest expense to current, with currentYear and 2 years back
+      const earliestYear = currentYear - 2;
+      const monthsList = [];
+      for (let y = currentYear; y >= earliestYear; y--) {
+        const maxMonth = y === currentYear ? now.getMonth() : 11;
+        for (let m = maxMonth; m >= 0; m--) {
+          monthsList.push(y + '-' + String(m + 1).padStart(2, '0'));
+        }
+      }
+
+      // For each month, gather items
+      const fixedItems = data.fixedExpenses;
+      const installmentsList = data.installments;
+
+      const buildMonthData = (mk) => {
+        const [y, m] = mk.split('-').map(Number);
+        const variableExp = data.expenses.filter(e => e.date.startsWith(mk));
+        const incomes = (data.incomes || []).filter(i => i.date.startsWith(mk));
+        const activeInst = installmentsList.filter(i => isInstallmentActiveInMonth(i, mk));
+
+        const items = [];
+        variableExp.forEach(e => items.push({ ...e, isVariable: true, sortDate: e.date }));
+        fixedItems.forEach(f => items.push({ id: 'fix-' + f.id + '-' + mk, supplier: f.name, amount: f.amount, category: f.category, paymentMethod: f.paymentMethod || 'credit', date: mk + '-01', sortDate: mk + '-01', isFixed: true, note: f.note }));
+        activeInst.forEach(i => items.push({ id: 'inst-' + i.id + '-' + mk, supplier: i.name, amount: i.amount, category: i.category, date: mk + '-01', sortDate: mk + '-01', isInstallment: true, installmentNumber: getInstallmentNumber(i, mk), totalPayments: i.totalPayments }));
+        incomes.forEach(inc => items.push({ id: 'inc-' + inc.id, supplier: inc.description, amount: inc.amount, date: inc.date, sortDate: inc.date, isIncome: true }));
+
+        items.sort((a, b) => b.sortDate.localeCompare(a.sortDate));
+
+        const totalExp = variableExp.reduce((s, e) => s + Number(e.amount), 0)
+          + fixedItems.reduce((s, f) => s + Number(f.amount), 0)
+          + activeInst.reduce((s, i) => s + Number(i.amount), 0);
+        const totalInc = incomes.reduce((s, i) => s + Number(i.amount), 0);
+        const net = totalExp - totalInc;
+
+        return { items, totalExp, totalInc, net, year: y, month: m, hasData: items.length > 0 };
+      };
+
+      // Filter months: show only those with data, or future months in current year (none in archive really)
+      const monthsWithData = monthsList.map(mk => ({ mk, ...buildMonthData(mk) })).filter(x => x.hasData || x.mk === currentMonthKey);
+
+      if (monthsWithData.length === 0) {
+        return <p className="text-center text-slate-400 py-16">אין עדיין נתונים בארכיון</p>;
+      }
+
+      return (
+        <div className="space-y-3">
+          <p className="text-xs text-slate-500 text-center mb-2">{earliestYear} - {currentYear} · {monthsWithData.length} חודשים</p>
+          {monthsWithData.map(monthData => {
+            const isExpanded = !!expandedMonths[monthData.mk];
+            const isCurrent = monthData.mk === currentMonthKey;
+            return (
+              <div key={monthData.mk} className="bg-white/80 backdrop-blur rounded-2xl shadow-sm border border-slate-200/50 overflow-hidden">
+                <button onClick={() => toggleMonth(monthData.mk)} className="w-full flex items-center justify-between p-4 hover:bg-slate-50 transition-colors text-right">
+                  <div className="flex items-center gap-2">
+                    {isExpanded ? <ChevronDown className="w-4 h-4 text-slate-500" /> : <ChevronLeft className="w-4 h-4 text-slate-500" />}
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-slate-800">{hebrewMonths[monthData.month]} {monthData.year}</span>
+                        {isCurrent && <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">החודש</span>}
+                      </div>
+                      <div className="text-xs text-slate-500">{monthData.items.length} פעולות</div>
+                    </div>
+                  </div>
+                  <div className="text-left">
+                    <div className="font-bold text-slate-800">{formatCurrency(monthData.totalExp)}</div>
+                    {monthData.totalInc > 0 && (
+                      <div className="text-[11px] text-emerald-700">+{formatCurrency(monthData.totalInc)}</div>
+                    )}
+                  </div>
+                </button>
+                {isExpanded && (
+                  <div className="px-4 pb-4 pt-1 space-y-1.5 border-t border-slate-100">
+                    {monthData.items.map(item => {
+                      const d = new Date(item.date);
+                      const dayMonth = `${d.getDate()}/${d.getMonth() + 1}`;
+                      return (
+                        <div key={item.id} className="flex items-center justify-between gap-2 py-1.5 text-sm">
+                          <div className="flex items-center gap-2 min-w-0 flex-1">
+                            <span className="text-[11px] text-slate-400 flex-shrink-0 w-9">{dayMonth}</span>
+                            <span className={`truncate ${item.isIncome ? 'text-emerald-700' : 'text-slate-700'}`}>{item.supplier}</span>
+                            {item.isFixed && <span className="text-[9px] bg-indigo-100 text-indigo-700 px-1 py-0.5 rounded-full flex-shrink-0">קבועה</span>}
+                            {item.isInstallment && <span className="text-[9px] bg-purple-100 text-purple-700 px-1 py-0.5 rounded-full flex-shrink-0">{item.installmentNumber}/{item.totalPayments}</span>}
+                            {item.isIncome && <span className="text-[9px] bg-emerald-100 text-emerald-700 px-1 py-0.5 rounded-full flex-shrink-0">הכנסה</span>}
+                          </div>
+                          <span className={`font-medium flex-shrink-0 ${item.isIncome ? 'text-emerald-700' : 'text-slate-800'}`}>
+                            {item.isIncome ? '+' : ''}{formatCurrency(Number(item.amount))}
+                          </span>
+                        </div>
+                      );
+                    })}
+                    <div className="flex items-center justify-between pt-2 mt-2 border-t border-slate-200 text-sm">
+                      <span className="font-medium text-slate-700">סה״כ ב{hebrewMonths[monthData.month]}</span>
+                      <div className="text-left">
+                        <div className="font-bold text-slate-800">{formatCurrency(monthData.net)}</div>
+                        {monthData.totalInc > 0 && (
+                          <div className="text-[10px] text-slate-500">{formatCurrency(monthData.totalExp)} הוצאה · {formatCurrency(monthData.totalInc)} הכנסה</div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       );
     }
 
