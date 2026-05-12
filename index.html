@@ -80,6 +80,8 @@
     const Download = (p) => <Icon {...p}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></Icon>;
     const Upload = (p) => <Icon {...p}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></Icon>;
     const AlertTriangle = (p) => <Icon {...p}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></Icon>;
+    const Gift = (p) => <Icon {...p}><polyline points="20 12 20 22 4 22 4 12"/><rect x="2" y="7" width="20" height="5"/><line x1="12" y1="22" x2="12" y2="7"/><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/></Icon>;
+    const TrendingUp = (p) => <Icon {...p}><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></Icon>;
 
     // ===== Constants =====
     const DEFAULT_CATEGORIES = ['אוכל', 'תרופות', 'ביטוחים', 'דלק ותחבורה', 'חשבונות', 'בילויים', 'ביגוד', 'בית', 'מתנות', 'אחר'];
@@ -116,9 +118,11 @@
       const [view, setView] = useState('home');
       const [showAddModal, setShowAddModal] = useState(false);
       const [editingExpense, setEditingExpense] = useState(null);
+      const [editingIncome, setEditingIncome] = useState(null);
       const [data, setData] = useState({
         budget: DEFAULT_BUDGET, categories: DEFAULT_CATEGORIES,
         expenses: [], fixedExpenses: [], installments: [], paidFixed: {},
+        incomes: [],
       });
 
       useEffect(() => {
@@ -133,6 +137,7 @@
               fixedExpenses: parsed.fixedExpenses ?? [],
               installments: parsed.installments ?? [],
               paidFixed: parsed.paidFixed ?? {},
+              incomes: parsed.incomes ?? [],
             });
           }
         } catch (e) { console.error(e); }
@@ -148,6 +153,9 @@
       const addExpense = (exp) => save({ ...data, expenses: [...data.expenses, { id: Date.now().toString() + Math.random(), ...exp }] });
       const updateExpense = (id, updates) => save({ ...data, expenses: data.expenses.map(e => e.id === id ? { ...e, ...updates } : e) });
       const deleteExpense = (id) => save({ ...data, expenses: data.expenses.filter(e => e.id !== id) });
+      const addIncome = (inc) => save({ ...data, incomes: [...(data.incomes || []), { id: Date.now().toString() + Math.random(), ...inc }] });
+      const updateIncome = (id, updates) => save({ ...data, incomes: (data.incomes || []).map(i => i.id === id ? { ...i, ...updates } : i) });
+      const deleteIncome = (id) => save({ ...data, incomes: (data.incomes || []).filter(i => i.id !== id) });
       const togglePaidFixed = (fixedId, mk) => {
         const paid = data.paidFixed?.[mk] || [];
         const newPaid = paid.includes(fixedId) ? paid.filter(id => id !== fixedId) : [...paid, fixedId];
@@ -157,20 +165,27 @@
       const now = new Date();
       const currentMonthKey = getMonthKey(now);
       const currentMonthExpenses = data.expenses.filter(e => e.date.startsWith(currentMonthKey));
+      const currentMonthIncomes = (data.incomes || []).filter(i => i.date.startsWith(currentMonthKey));
       const monthlyVariable = currentMonthExpenses.reduce((s, e) => s + Number(e.amount), 0);
       const monthlyFixed = data.fixedExpenses.reduce((s, e) => s + Number(e.amount), 0);
+      const monthlyIncome = currentMonthIncomes.reduce((s, i) => s + Number(i.amount), 0);
       const monthlyInstallments = data.installments
         .filter(i => isInstallmentActiveInMonth(i, currentMonthKey))
         .reduce((s, i) => s + Number(i.amount), 0);
       const totalSpent = monthlyVariable + monthlyFixed + monthlyInstallments;
-      const balance = data.budget - totalSpent;
+      const balance = data.budget - totalSpent + monthlyIncome;
 
       if (!loaded) return <div className="min-h-screen flex items-center justify-center text-blue-700">טוען...</div>;
+
+      const closeModal = () => { setShowAddModal(false); setEditingExpense(null); setEditingIncome(null); };
 
       return (
         <div dir="rtl" className="min-h-screen pb-24">
           <div className="max-w-2xl mx-auto px-4 py-6">
-            {view === 'home' && <HomeView data={data} balance={balance} totalSpent={totalSpent} currentMonthKey={currentMonthKey} currentMonthExpenses={currentMonthExpenses} onEdit={(e) => { setEditingExpense(e); setShowAddModal(true); }} onDelete={deleteExpense} onTogglePaid={togglePaidFixed} />}
+            {view === 'home' && <HomeView data={data} balance={balance} totalSpent={totalSpent} monthlyIncome={monthlyIncome} currentMonthKey={currentMonthKey} currentMonthExpenses={currentMonthExpenses} currentMonthIncomes={currentMonthIncomes}
+              onEdit={(e) => { setEditingExpense(e); setEditingIncome(null); setShowAddModal(true); }}
+              onEditIncome={(i) => { setEditingIncome(i); setEditingExpense(null); setShowAddModal(true); }}
+              onDelete={deleteExpense} onDeleteIncome={deleteIncome} onTogglePaid={togglePaidFixed} />}
             {view === 'stats' && <StatsView data={data} />}
             {view === 'settings' && <SettingsView data={data} save={save} />}
           </div>
@@ -180,7 +195,7 @@
               <NavButton icon={<Home className="w-5 h-5" />} label="בית" active={view === 'home'} onClick={() => setView('home')} />
               <NavButton icon={<BarChart3 className="w-5 h-5" />} label="נתונים" active={view === 'stats'} onClick={() => setView('stats')} />
               <NavButton icon={<Settings className="w-5 h-5" />} label="הגדרות" active={view === 'settings'} onClick={() => setView('settings')} />
-              <button onClick={() => { setEditingExpense(null); setShowAddModal(true); }}
+              <button onClick={() => { setEditingExpense(null); setEditingIncome(null); setShowAddModal(true); }}
                 className="absolute left-1/2 -translate-x-1/2 -top-6 w-14 h-14 rounded-full bg-blue-600 text-white shadow-lg flex items-center justify-center hover:bg-blue-700 active:scale-95 transition-all ring-4 ring-blue-50">
                 <Plus className="w-7 h-7" strokeWidth={2.5} />
               </button>
@@ -188,9 +203,10 @@
           </nav>
 
           {showAddModal && (
-            <ExpenseModal categories={data.categories} expense={editingExpense}
-              onSave={(exp) => { editingExpense ? updateExpense(editingExpense.id, exp) : addExpense(exp); setShowAddModal(false); setEditingExpense(null); }}
-              onClose={() => { setShowAddModal(false); setEditingExpense(null); }} />
+            <TransactionModal categories={data.categories} expense={editingExpense} income={editingIncome}
+              onSaveExpense={(exp) => { editingExpense ? updateExpense(editingExpense.id, exp) : addExpense(exp); closeModal(); }}
+              onSaveIncome={(inc) => { editingIncome ? updateIncome(editingIncome.id, inc) : addIncome(inc); closeModal(); }}
+              onClose={closeModal} />
           )}
         </div>
       );
@@ -204,7 +220,7 @@
       );
     }
 
-    function HomeView({ data, balance, totalSpent, currentMonthKey, currentMonthExpenses, onEdit, onDelete, onTogglePaid }) {
+    function HomeView({ data, balance, totalSpent, monthlyIncome, currentMonthKey, currentMonthExpenses, currentMonthIncomes, onEdit, onEditIncome, onDelete, onDeleteIncome, onTogglePaid }) {
       const now = new Date();
       const balancePositive = balance >= 0;
       const progressPercent = Math.min((totalSpent / data.budget) * 100, 100);
@@ -223,7 +239,12 @@
         installmentNumber: getInstallmentNumber(i, currentMonthKey), totalPayments: i.totalPayments,
       }));
 
-      const allMonth = [...currentMonthExpenses, ...fixedItems, ...activeInstallments].sort((a, b) => b.date.localeCompare(a.date));
+      const incomeItems = (currentMonthIncomes || []).map(inc => ({
+        id: 'income-' + inc.id, incomeId: inc.id, supplier: inc.description, amount: inc.amount,
+        date: inc.date, isIncome: true,
+      }));
+
+      const allMonth = [...currentMonthExpenses, ...fixedItems, ...activeInstallments, ...incomeItems].sort((a, b) => b.date.localeCompare(a.date));
 
       return (
         <>
@@ -238,22 +259,28 @@
               <span className={`text-4xl font-bold ${balancePositive ? '' : 'text-rose-100'}`}>{formatCurrency(balance)}</span>
               {!balancePositive && <span className="text-rose-100 text-sm font-medium">חריגה מהתקציב</span>}
             </div>
-            <div className="text-xs text-blue-100 mb-2">הוצאת {formatCurrency(totalSpent)} מתוך {formatCurrency(data.budget)}</div>
-            <div className="w-full h-2 bg-blue-900/30 rounded-full overflow-hidden">
+            <div className="text-xs text-blue-100 mb-1">הוצאת {formatCurrency(totalSpent)} מתוך {formatCurrency(data.budget)}</div>
+            {monthlyIncome > 0 && (
+              <div className="text-xs text-emerald-200 mb-2 flex items-center gap-1">
+                <TrendingUp className="w-3 h-3" />
+                <span>נכנס החודש: {formatCurrency(monthlyIncome)}</span>
+              </div>
+            )}
+            <div className="w-full h-2 bg-blue-900/30 rounded-full overflow-hidden mt-1">
               <div className={`h-full transition-all ${balancePositive ? 'bg-white' : 'bg-rose-300'}`} style={{ width: `${progressPercent}%` }} />
             </div>
           </div>
 
           <div className="bg-white/80 backdrop-blur rounded-3xl p-5 shadow-sm border border-slate-200/50">
-            <h2 className="text-lg font-bold text-slate-800 mb-3">הוצאות החודש</h2>
+            <h2 className="text-lg font-bold text-slate-800 mb-3">פעולות החודש</h2>
             {allMonth.length === 0 ? (
-              <p className="text-center text-slate-400 py-8">אין עדיין הוצאות החודש</p>
+              <p className="text-center text-slate-400 py-8">אין עדיין פעולות החודש</p>
             ) : (
               <div className="space-y-2">
                 {allMonth.map(exp => (
                   <ExpenseRow key={exp.id} expense={exp}
-                    onEdit={(exp.isFixed || exp.isInstallment) ? null : () => onEdit(exp)}
-                    onDelete={(exp.isFixed || exp.isInstallment) ? null : () => onDelete(exp.id)}
+                    onEdit={exp.isIncome ? () => onEditIncome({ id: exp.incomeId, amount: exp.amount, description: exp.supplier, date: exp.date }) : (exp.isFixed || exp.isInstallment) ? null : () => onEdit(exp)}
+                    onDelete={exp.isIncome ? () => onDeleteIncome(exp.incomeId) : (exp.isFixed || exp.isInstallment) ? null : () => onDelete(exp.id)}
                     onTogglePaid={exp.isFixed && exp.requiresConfirmation ? () => onTogglePaid(exp.fixedId, currentMonthKey) : null} />
                 ))}
               </div>
@@ -268,10 +295,13 @@
       const dayMonth = `${date.getDate()}/${date.getMonth() + 1}`;
       const PaymentIcon = expense.paymentMethod === 'cash' ? Wallet : CreditCard;
       const isPending = expense.isFixed && expense.requiresConfirmation && !expense.isPaid;
+      const isIncome = expense.isIncome;
 
       const inner = (
-        <div className={`flex items-center gap-3 p-3 rounded-xl transition-colors group ${isPending ? 'bg-slate-100/60 border border-dashed border-slate-300 hover:bg-slate-100' : 'bg-slate-50 hover:bg-slate-100'}`}>
-          {isPending ? (
+        <div className={`flex items-center gap-3 p-3 rounded-xl transition-colors group ${isIncome ? 'bg-emerald-50/70 hover:bg-emerald-50 border border-emerald-100' : isPending ? 'bg-slate-100/60 border border-dashed border-slate-300 hover:bg-slate-100' : 'bg-slate-50 hover:bg-slate-100'}`}>
+          {isIncome ? (
+            <div className="bg-emerald-100 text-emerald-600 p-2 rounded-full"><TrendingUp className="w-4 h-4" strokeWidth={2.5} /></div>
+          ) : isPending ? (
             <div className="bg-white border-2 border-slate-300 p-1.5 rounded-full"><Circle className="w-4 h-4 text-slate-300" /></div>
           ) : expense.isFixed && expense.requiresConfirmation && expense.isPaid ? (
             <div className="bg-emerald-100 text-emerald-600 p-2 rounded-full"><Check className="w-4 h-4" strokeWidth={3} /></div>
@@ -285,7 +315,10 @@
           <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 min-w-0 flex-wrap">
-                <span className={`font-medium truncate ${isPending ? 'text-slate-500' : 'text-slate-800'}`}>{expense.supplier}</span>
+                <span className={`font-medium truncate ${isIncome ? 'text-emerald-800' : isPending ? 'text-slate-500' : 'text-slate-800'}`}>{expense.supplier}</span>
+                {isIncome && (
+                  <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full flex-shrink-0">הכנסה</span>
+                )}
                 {expense.isFixed && (
                   <span className={`text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0 ${isPending ? 'bg-slate-200 text-slate-500' : 'bg-indigo-100 text-indigo-700'}`}>
                     {isPending ? 'ממתין לתשלום' : 'קבועה'}
@@ -295,13 +328,15 @@
                   <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full flex-shrink-0">תשלום {expense.installmentNumber}/{expense.totalPayments}</span>
                 )}
               </div>
-              <span className={`font-bold flex-shrink-0 ${isPending ? 'text-slate-400' : 'text-slate-700'}`}>{formatCurrency(Number(expense.amount))}</span>
+              <span className={`font-bold flex-shrink-0 ${isIncome ? 'text-emerald-700' : isPending ? 'text-slate-400' : 'text-slate-700'}`}>
+                {isIncome ? '+' : ''}{formatCurrency(Number(expense.amount))}
+              </span>
             </div>
-            <div className="flex items-center justify-between text-xs text-slate-500">
-              <span>{expense.category}{!expense.isFixed && !expense.isInstallment && ` · ${dayMonth}`}</span>
+            <div className={`flex items-center justify-between text-xs ${isIncome ? 'text-emerald-700/70' : 'text-slate-500'}`}>
+              <span>{isIncome ? dayMonth : `${expense.category}${!expense.isFixed && !expense.isInstallment ? ` · ${dayMonth}` : ''}`}</span>
               {(onEdit || onDelete) && (
                 <div className="flex items-center gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
-                  {onEdit && <button onClick={(e) => { e.stopPropagation(); onEdit(); }} className="text-slate-400 hover:text-blue-600 p-1"><Edit2 className="w-3.5 h-3.5" /></button>}
+                  {onEdit && <button onClick={(e) => { e.stopPropagation(); onEdit(); }} className={`p-1 ${isIncome ? 'text-emerald-500 hover:text-emerald-700' : 'text-slate-400 hover:text-blue-600'}`}><Edit2 className="w-3.5 h-3.5" /></button>}
                   {onDelete && <button onClick={(e) => { e.stopPropagation(); onDelete(); }} className="text-slate-400 hover:text-rose-600 p-1"><Trash2 className="w-3.5 h-3.5" /></button>}
                 </div>
               )}
@@ -320,70 +355,134 @@
       return inner;
     }
 
-    function ExpenseModal({ categories, expense, onSave, onClose }) {
+    function TransactionModal({ categories, expense, income, onSaveExpense, onSaveIncome, onClose }) {
+      const isEditing = !!(expense || income);
+      const initialType = income ? 'income' : 'expense';
+      const [type, setType] = useState(initialType);
+
+      // Expense fields
       const [supplier, setSupplier] = useState(expense?.supplier || '');
       const [amount, setAmount] = useState(expense?.amount || '');
       const [category, setCategory] = useState(expense?.category || categories[0] || '');
       const [paymentMethod, setPaymentMethod] = useState(expense?.paymentMethod || 'credit');
       const [date, setDate] = useState(expense?.date || formatDate(new Date()));
       const [note, setNote] = useState(expense?.note || '');
-      const canSave = supplier.trim() && Number(amount) > 0 && category;
+
+      // Income fields
+      const [incomeAmount, setIncomeAmount] = useState(income?.amount || '');
+      const [incomeDescription, setIncomeDescription] = useState(income?.description || '');
+      const [incomeDate, setIncomeDate] = useState(income?.date || formatDate(new Date()));
+
+      const canSaveExpense = supplier.trim() && Number(amount) > 0 && category;
+      const canSaveIncome = incomeDescription.trim() && Number(incomeAmount) > 0;
+
+      const handleSave = () => {
+        if (type === 'expense') {
+          if (!canSaveExpense) return;
+          onSaveExpense({ supplier: supplier.trim(), amount: Number(amount), category, paymentMethod, date, note: note.trim() || undefined });
+        } else {
+          if (!canSaveIncome) return;
+          onSaveIncome({ amount: Number(incomeAmount), description: incomeDescription.trim(), date: incomeDate });
+        }
+      };
+
+      const title = isEditing
+        ? (type === 'expense' ? 'עריכת הוצאה' : 'עריכת הכנסה')
+        : 'פעולה חדשה';
 
       return (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
           <div dir="rtl" className="bg-white w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl p-6 shadow-xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-5">
-              <h3 className="text-xl font-bold text-slate-800">{expense ? 'עריכת הוצאה' : 'הוצאה חדשה'}</h3>
+              <h3 className="text-xl font-bold text-slate-800">{title}</h3>
               <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-1"><X className="w-5 h-5" /></button>
             </div>
-            <div className="space-y-4">
-              <Field label="ספק">
-                <input type="text" value={supplier} onChange={(e) => setSupplier(e.target.value)} placeholder="אמזון, סופר פארם..."
-                  className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400 text-slate-800" />
-              </Field>
-              <Field label="סכום">
-                <div className="relative">
-                  <input type="number" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0"
-                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400 text-slate-800 pl-12" />
-                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">₪</span>
-                </div>
-              </Field>
-              <Field label="קטגוריה">
-                <div className="relative">
-                  <select value={category} onChange={(e) => setCategory(e.target.value)} dir="rtl"
-                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400 text-slate-800 pl-10"
-                    style={{ fontFamily: "'Heebo', sans-serif" }}>
-                    {categories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
-                  </select>
-                  <ChevronDown className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
-                </div>
-              </Field>
-              <Field label="אמצעי תשלום">
-                <div className="grid grid-cols-2 gap-2">
-                  <button onClick={() => setPaymentMethod('credit')}
-                    className={`flex items-center justify-center gap-2 py-3 rounded-xl border ${paymentMethod === 'credit' ? 'bg-blue-50 border-blue-400 text-blue-700' : 'bg-slate-50 border-slate-200 text-slate-600'}`}>
-                    <CreditCard className="w-4 h-4" /><span className="text-sm font-medium">כרטיס אשראי</span>
-                  </button>
-                  <button onClick={() => setPaymentMethod('cash')}
-                    className={`flex items-center justify-center gap-2 py-3 rounded-xl border ${paymentMethod === 'cash' ? 'bg-blue-50 border-blue-400 text-blue-700' : 'bg-slate-50 border-slate-200 text-slate-600'}`}>
-                    <Wallet className="w-4 h-4" /><span className="text-sm font-medium">מזומן</span>
-                  </button>
-                </div>
-              </Field>
-              <Field label="תאריך">
-                <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
-                  className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400 text-slate-800" />
-              </Field>
-              <Field label="הערה (אופציונלי)">
-                <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="הקשר, החזר חלקי, מתנה למישהו..." rows="2"
-                  className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400 text-slate-800 resize-none" />
-              </Field>
-            </div>
+
+            {!isEditing && (
+              <div className="grid grid-cols-2 gap-1 bg-slate-100 rounded-2xl p-1 mb-5">
+                <button onClick={() => setType('expense')}
+                  className={`py-2.5 rounded-xl text-sm font-medium transition-all ${type === 'expense' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500'}`}>
+                  הוצאה
+                </button>
+                <button onClick={() => setType('income')}
+                  className={`flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-sm font-medium transition-all ${type === 'income' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-500'}`}>
+                  <TrendingUp className="w-3.5 h-3.5" />
+                  הכנסה
+                </button>
+              </div>
+            )}
+
+            {type === 'expense' ? (
+              <div className="space-y-4">
+                <Field label="ספק">
+                  <input type="text" value={supplier} onChange={(e) => setSupplier(e.target.value)} placeholder="אמזון, סופר פארם..."
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400 text-slate-800" />
+                </Field>
+                <Field label="סכום">
+                  <div className="relative">
+                    <input type="number" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0"
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400 text-slate-800 pl-12" />
+                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">₪</span>
+                  </div>
+                </Field>
+                <Field label="קטגוריה">
+                  <div className="relative">
+                    <select value={category} onChange={(e) => setCategory(e.target.value)} dir="rtl"
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400 text-slate-800 pl-10"
+                      style={{ fontFamily: "'Heebo', sans-serif" }}>
+                      {categories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                    </select>
+                    <ChevronDown className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+                  </div>
+                </Field>
+                <Field label="אמצעי תשלום">
+                  <div className="grid grid-cols-2 gap-2">
+                    <button onClick={() => setPaymentMethod('credit')}
+                      className={`flex items-center justify-center gap-2 py-3 rounded-xl border ${paymentMethod === 'credit' ? 'bg-blue-50 border-blue-400 text-blue-700' : 'bg-slate-50 border-slate-200 text-slate-600'}`}>
+                      <CreditCard className="w-4 h-4" /><span className="text-sm font-medium">כרטיס אשראי</span>
+                    </button>
+                    <button onClick={() => setPaymentMethod('cash')}
+                      className={`flex items-center justify-center gap-2 py-3 rounded-xl border ${paymentMethod === 'cash' ? 'bg-blue-50 border-blue-400 text-blue-700' : 'bg-slate-50 border-slate-200 text-slate-600'}`}>
+                      <Wallet className="w-4 h-4" /><span className="text-sm font-medium">מזומן</span>
+                    </button>
+                  </div>
+                </Field>
+                <Field label="תאריך">
+                  <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400 text-slate-800" />
+                </Field>
+                <Field label="הערה (אופציונלי)">
+                  <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="הקשר, החזר חלקי, מתנה למישהו..." rows="2"
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400 text-slate-800 resize-none" />
+                </Field>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <Field label="סכום">
+                  <div className="relative">
+                    <input type="number" inputMode="decimal" value={incomeAmount} onChange={(e) => setIncomeAmount(e.target.value)} placeholder="0" autoFocus
+                      className="w-full px-4 py-3 bg-emerald-50/50 border border-emerald-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-400 text-slate-800 pl-12" />
+                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-emerald-600">₪</span>
+                  </div>
+                </Field>
+                <Field label="על מה זה?">
+                  <input type="text" value={incomeDescription} onChange={(e) => setIncomeDescription(e.target.value)} placeholder="מתנה ליום הולדת, החזר על הדשן, החזר מס..."
+                    className="w-full px-4 py-3 bg-emerald-50/50 border border-emerald-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-400 text-slate-800" />
+                </Field>
+                <Field label="תאריך">
+                  <input type="date" value={incomeDate} onChange={(e) => setIncomeDate(e.target.value)}
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-400 text-slate-800" />
+                </Field>
+                <p className="text-xs text-slate-500 leading-relaxed bg-slate-50 rounded-xl p-3">
+                  💡 הכנסה תיכלל בחישוב היתרה החודשית ותקזז מהוצאות (אבל לא תיכנס לחלוקה לקטגוריות).
+                </p>
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-3 mt-6">
               <button onClick={onClose} className="py-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium">ביטול</button>
-              <button disabled={!canSave}
-                onClick={() => { if (!canSave) return; onSave({ supplier: supplier.trim(), amount: Number(amount), category, paymentMethod, date, note: note.trim() || undefined }); }}
-                className="py-3 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-medium">שמירה</button>
+              <button disabled={type === 'expense' ? !canSaveExpense : !canSaveIncome} onClick={handleSave}
+                className={`py-3 rounded-xl text-white font-medium disabled:bg-slate-300 ${type === 'income' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-blue-600 hover:bg-blue-700'}`}>שמירה</button>
             </div>
           </div>
         </div>
@@ -413,8 +512,9 @@
         const mk = currentYear + '-' + String(m + 1).padStart(2, '0');
         const monthExp = data.expenses.filter(e => e.date.startsWith(mk)).reduce((s, e) => s + Number(e.amount), 0);
         const inst = data.installments.filter(i => isInstallmentActiveInMonth(i, mk)).reduce((s, i) => s + Number(i.amount), 0);
+        const monthInc = (data.incomes || []).filter(i => i.date.startsWith(mk)).reduce((s, i) => s + Number(i.amount), 0);
         const total = monthExp + fixedTotal + inst;
-        yearData.push({ month: hebrewMonthsShort[m], balance: Math.round(data.budget - total), expenses: Math.round(total) });
+        yearData.push({ month: hebrewMonthsShort[m], balance: Math.round(data.budget - total + monthInc), expenses: Math.round(total), incomes: Math.round(monthInc) });
       }
 
       return (
@@ -512,6 +612,8 @@
 
       const sortedCategories = Object.entries(categoryStats).map(([name, s]) => ({ name, ...s })).sort((a, b) => b.total - a.total);
       const totalSpent = sortedCategories.reduce((s, c) => s + c.total, 0);
+      const incomesInQuarter = (data.incomes || []).filter(i => monthKeys.some(mk => i.date.startsWith(mk)));
+      const totalIncome = incomesInQuarter.reduce((s, i) => s + Number(i.amount), 0);
       const allNotes = variableInQuarter.filter(e => e.note).sort((a, b) => b.date.localeCompare(a.date));
       const isFuture = monthsCount === 0;
 
@@ -531,7 +633,7 @@
           <p className="text-xs text-slate-500 mb-4">{hebrewMonths[startMonth]} - {hebrewMonths[startMonth + 2]}</p>
 
           {isFuture ? <p className="text-center text-slate-400 py-12">רבעון עתידי - עדיין אין נתונים</p>
-            : sortedCategories.length === 0 ? <p className="text-center text-slate-400 py-12">אין הוצאות ברבעון הזה</p>
+            : sortedCategories.length === 0 && totalIncome === 0 ? <p className="text-center text-slate-400 py-12">אין הוצאות ברבעון הזה</p>
             : (
               <>
                 <div className="bg-amber-50/60 border border-amber-200 rounded-2xl p-3 mb-4">
@@ -542,6 +644,15 @@
                   <span className="font-medium text-slate-700">סה״כ הוצאות ברבעון</span>
                   <span className="font-bold text-slate-800">{formatCurrency(totalSpent)}</span>
                 </div>
+                {totalIncome > 0 && (
+                  <div className="mb-4 flex items-center justify-between text-sm px-1 -mt-2">
+                    <span className="font-medium text-emerald-700 flex items-center gap-1.5">
+                      <TrendingUp className="w-3.5 h-3.5" />
+                      הכנסות ברבעון
+                    </span>
+                    <span className="font-bold text-emerald-700">+{formatCurrency(totalIncome)}</span>
+                  </div>
+                )}
                 <div className="space-y-2 mb-4">
                   <p className="text-xs text-slate-500 font-medium px-1 mb-1">קטגוריות</p>
                   {sortedCategories.map((cat, i) => {
@@ -646,11 +757,12 @@
             const expensesCount = Array.isArray(inner.expenses) ? inner.expenses.length : 0;
             const fixedCount = Array.isArray(inner.fixedExpenses) ? inner.fixedExpenses.length : 0;
             const installmentsCount = Array.isArray(inner.installments) ? inner.installments.length : 0;
+            const incomesCount = Array.isArray(inner.incomes) ? inner.incomes.length : 0;
             setPendingImport({
               parsed,
               fileName: file.name,
               exportedAt: parsed.exportedAt,
-              counts: { expenses: expensesCount, fixed: fixedCount, installments: installmentsCount },
+              counts: { expenses: expensesCount, fixed: fixedCount, installments: installmentsCount, incomes: incomesCount },
             });
           } catch (err) {
             setImportError('הקובץ לא תקין: ' + (err?.message || 'שגיאה לא ידועה'));
@@ -670,6 +782,7 @@
           fixedExpenses: Array.isArray(imp.fixedExpenses) ? imp.fixedExpenses : [],
           installments: Array.isArray(imp.installments) ? imp.installments : [],
           paidFixed: (imp.paidFixed && typeof imp.paidFixed === 'object') ? imp.paidFixed : {},
+          incomes: Array.isArray(imp.incomes) ? imp.incomes : [],
         });
         setPendingImport(null);
       };
@@ -931,6 +1044,7 @@
                   <div className="flex justify-between"><span className="text-slate-500">הוצאות:</span><span className="text-slate-700 font-medium">{pendingImport.counts.expenses}</span></div>
                   <div className="flex justify-between"><span className="text-slate-500">הוצאות קבועות:</span><span className="text-slate-700 font-medium">{pendingImport.counts.fixed}</span></div>
                   <div className="flex justify-between"><span className="text-slate-500">תשלומים:</span><span className="text-slate-700 font-medium">{pendingImport.counts.installments}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-500">הכנסות:</span><span className="text-slate-700 font-medium">{pendingImport.counts.incomes || 0}</span></div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-2">
