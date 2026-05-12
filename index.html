@@ -77,6 +77,9 @@
     const Repeat = (p) => <Icon {...p}><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></Icon>;
     const Sparkles = (p) => <Icon {...p}><path d="M12 3l1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2z"/><path d="M5 3v4"/><path d="M3 5h4"/><path d="M19 17v4"/><path d="M17 19h4"/></Icon>;
     const MessageSquare = (p) => <Icon {...p}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></Icon>;
+    const Download = (p) => <Icon {...p}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></Icon>;
+    const Upload = (p) => <Icon {...p}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></Icon>;
+    const AlertTriangle = (p) => <Icon {...p}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></Icon>;
 
     // ===== Constants =====
     const DEFAULT_CATEGORIES = ['אוכל', 'תרופות', 'ביטוחים', 'דלק ותחבורה', 'חשבונות', 'בילויים', 'ביגוד', 'בית', 'מתנות', 'אחר'];
@@ -595,6 +598,97 @@
       const [fixedForm, setFixedForm] = useState({ name: '', amount: '', category: data.categories[0] || '', paymentMethod: 'credit', requiresConfirmation: false, note: '' });
       const [installmentForm, setInstallmentForm] = useState({ name: '', amount: '', totalPayments: '', currentInstallment: '1', category: data.categories[0] || '', note: '' });
 
+      // ===== Backup state =====
+      const [pendingImport, setPendingImport] = useState(null);
+      const [importError, setImportError] = useState('');
+      const [exportFlash, setExportFlash] = useState(false);
+
+      const exportBackup = () => {
+        try {
+          const backup = {
+            appName: 'kesef',
+            version: 1,
+            exportedAt: new Date().toISOString(),
+            data: data,
+          };
+          const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const now = new Date();
+          const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `kesef-backup-${dateStr}.json`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          setExportFlash(true);
+          setTimeout(() => setExportFlash(false), 2500);
+        } catch (e) {
+          console.error(e);
+          alert('שגיאה ביצירת הגיבוי');
+        }
+      };
+
+      const handleImportFileSelect = (e) => {
+        const file = e.target.files?.[0];
+        e.target.value = ''; // reset so same file can be picked again
+        if (!file) return;
+        setImportError('');
+        const reader = new FileReader();
+        reader.onload = (evt) => {
+          try {
+            const parsed = JSON.parse(evt.target.result);
+            const inner = parsed?.data;
+            if (!inner || typeof inner !== 'object') {
+              throw new Error('הקובץ לא נראה כמו גיבוי תקין של האפליקציה');
+            }
+            const expensesCount = Array.isArray(inner.expenses) ? inner.expenses.length : 0;
+            const fixedCount = Array.isArray(inner.fixedExpenses) ? inner.fixedExpenses.length : 0;
+            const installmentsCount = Array.isArray(inner.installments) ? inner.installments.length : 0;
+            setPendingImport({
+              parsed,
+              fileName: file.name,
+              exportedAt: parsed.exportedAt,
+              counts: { expenses: expensesCount, fixed: fixedCount, installments: installmentsCount },
+            });
+          } catch (err) {
+            setImportError('הקובץ לא תקין: ' + (err?.message || 'שגיאה לא ידועה'));
+          }
+        };
+        reader.onerror = () => setImportError('שגיאה בקריאת הקובץ');
+        reader.readAsText(file);
+      };
+
+      const confirmImport = () => {
+        if (!pendingImport) return;
+        const imp = pendingImport.parsed.data;
+        save({
+          budget: typeof imp.budget === 'number' ? imp.budget : DEFAULT_BUDGET,
+          categories: Array.isArray(imp.categories) ? imp.categories : DEFAULT_CATEGORIES,
+          expenses: Array.isArray(imp.expenses) ? imp.expenses : [],
+          fixedExpenses: Array.isArray(imp.fixedExpenses) ? imp.fixedExpenses : [],
+          installments: Array.isArray(imp.installments) ? imp.installments : [],
+          paidFixed: (imp.paidFixed && typeof imp.paidFixed === 'object') ? imp.paidFixed : {},
+        });
+        setPendingImport(null);
+      };
+
+      const cancelImport = () => setPendingImport(null);
+
+      const formatExportDate = (iso) => {
+        try {
+          const d = new Date(iso);
+          if (isNaN(d.getTime())) return null;
+          const dd = String(d.getDate()).padStart(2, '0');
+          const mm = String(d.getMonth() + 1).padStart(2, '0');
+          const yyyy = d.getFullYear();
+          const hh = String(d.getHours()).padStart(2, '0');
+          const min = String(d.getMinutes()).padStart(2, '0');
+          return `${dd}/${mm}/${yyyy} בשעה ${hh}:${min}`;
+        } catch (e) { return null; }
+      };
+
       const updateBudget = () => { const n = Number(budgetInput); if (n > 0) save({ ...data, budget: n }); };
       const addCategory = () => { const c = newCategory.trim(); if (c && !data.categories.includes(c)) { save({ ...data, categories: [...data.categories, c] }); setNewCategory(''); } };
       const removeCategory = (cat) => save({ ...data, categories: data.categories.filter(c => c !== cat) });
@@ -781,6 +875,71 @@
               <button onClick={addCategory} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium">הוסף</button>
             </div>
           </Section>
+
+          <Section title="גיבוי ושחזור">
+            <p className="text-xs text-slate-500 mb-3 leading-relaxed">
+              שמרי קובץ גיבוי במחשב, בענן או במייל. תוכלי לשחזר ממנו בכל עת - אם תחליפי טלפון, תמחקי בטעות, או שהאפליקציה תאבד את הנתונים.
+            </p>
+
+            <button onClick={exportBackup}
+              className="w-full flex items-center justify-center gap-2 py-3 mb-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium transition-colors">
+              <Download className="w-4 h-4" />
+              ייצוא גיבוי לקובץ
+            </button>
+
+            {exportFlash && (
+              <div className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 mb-2 text-center">
+                ✓ הגיבוי נשמר! בדקי בתיקיית ההורדות
+              </div>
+            )}
+
+            <label className="w-full flex items-center justify-center gap-2 py-3 bg-white border-2 border-slate-200 hover:border-blue-400 hover:text-blue-600 text-slate-700 rounded-xl text-sm font-medium cursor-pointer transition-colors">
+              <Upload className="w-4 h-4" />
+              ייבוא מקובץ גיבוי
+              <input type="file" accept=".json,application/json" onChange={handleImportFileSelect} className="hidden" />
+            </label>
+
+            {importError && (
+              <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 mt-2">
+                {importError}
+              </div>
+            )}
+
+            <div className="text-[11px] text-slate-400 mt-3 leading-relaxed">
+              💡 טיפ: עשי גיבוי לפני כל שדרוג, וכל כמה זמן באופן קבוע. הקובץ קטן ואפשר לשמור עותקים רבים.
+            </div>
+          </Section>
+
+          {pendingImport && (
+            <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={cancelImport}>
+              <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-start gap-3 mb-4">
+                  <div className="flex-shrink-0 w-10 h-10 bg-amber-100 rounded-full flex items-center justify-center">
+                    <AlertTriangle className="w-5 h-5 text-amber-600" />
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="text-lg font-bold text-slate-800 mb-1">להחליף את כל הנתונים?</h3>
+                    <p className="text-sm text-slate-600">פעולה זו תמחק את כל מה שיש באפליקציה כרגע ותחליף אותו בנתונים מהקובץ.</p>
+                  </div>
+                </div>
+
+                <div className="bg-slate-50 rounded-xl p-3 mb-4 space-y-1.5 text-sm">
+                  <div className="flex justify-between"><span className="text-slate-500">קובץ:</span><span className="text-slate-700 font-medium truncate ms-2">{pendingImport.fileName}</span></div>
+                  {formatExportDate(pendingImport.exportedAt) && (
+                    <div className="flex justify-between"><span className="text-slate-500">תאריך גיבוי:</span><span className="text-slate-700 font-medium">{formatExportDate(pendingImport.exportedAt)}</span></div>
+                  )}
+                  <div className="flex justify-between"><span className="text-slate-500">הוצאות:</span><span className="text-slate-700 font-medium">{pendingImport.counts.expenses}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-500">הוצאות קבועות:</span><span className="text-slate-700 font-medium">{pendingImport.counts.fixed}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-500">תשלומים:</span><span className="text-slate-700 font-medium">{pendingImport.counts.installments}</span></div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <button onClick={cancelImport} className="py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-medium">ביטול</button>
+                  <button onClick={confirmImport} className="py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-medium">החלף נתונים</button>
+                </div>
+              </div>
+            </div>
+          )}
         </>
       );
     }
