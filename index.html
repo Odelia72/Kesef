@@ -147,13 +147,15 @@
         }
       });
 
-      // Installments with shared toggle - one entry of total × 2 on start month
+      // Installments with shared toggle - one entry of total × 2 on the date shared was activated
+      const todayStr = formatDate(new Date());
       (data.installments || []).filter(i => i.shared).forEach(i => {
+        const entryDate = i.sharedDate || todayStr;
         items.push({
           id: 'shl-inst-' + i.id, sourceType: 'linked-installment', linkedId: i.id,
           supplier: i.name + ' (סה״כ ' + i.totalPayments + ' תשלומים)',
           amount: Number(i.amount) * i.totalPayments * 2,
-          category: i.category, date: i.startMonth + '-01', note: i.note,
+          category: i.category, date: entryDate, note: i.note,
         });
       });
 
@@ -1320,12 +1322,17 @@
         const current = Number(installmentForm.currentInstallment);
         if (!installmentForm.name.trim() || !Number(installmentForm.amount) || !total || !current || current > total) return;
         const start = new Date(); start.setDate(1); start.setMonth(start.getMonth() - (current - 1));
-        save({ ...data, installments: [...data.installments, { id: Date.now().toString(), name: installmentForm.name.trim(), amount: Number(installmentForm.amount), totalPayments: total, startMonth: getMonthKey(start), category: installmentForm.category, shared: installmentForm.shared || undefined, note: installmentForm.note.trim() || undefined }] });
+        const todayStr = formatDate(new Date());
+        save({ ...data, installments: [...data.installments, { id: Date.now().toString(), name: installmentForm.name.trim(), amount: Number(installmentForm.amount), totalPayments: total, startMonth: getMonthKey(start), category: installmentForm.category, shared: installmentForm.shared || undefined, sharedDate: installmentForm.shared ? todayStr : undefined, note: installmentForm.note.trim() || undefined }] });
         setInstallmentForm({ name: '', amount: '', totalPayments: '', currentInstallment: '1', category: data.categories[0] || '', shared: false, note: '' });
         setShowAddInstallment(false);
       };
       const removeInstallment = (id) => save({ ...data, installments: data.installments.filter(i => i.id !== id) });
-      const toggleInstallmentShared = (id) => save({ ...data, installments: data.installments.map(i => i.id === id ? { ...i, shared: !i.shared } : i) });
+      const toggleInstallmentShared = (id) => save({ ...data, installments: data.installments.map(i => {
+        if (i.id !== id) return i;
+        if (i.shared) return { ...i, shared: undefined };
+        return { ...i, shared: true, sharedDate: i.sharedDate || formatDate(new Date()) };
+      }) });
 
       const currentMonthKey = getMonthKey(new Date());
 
@@ -1619,12 +1626,12 @@
 
       const allItems = computeAllSharedItems(data);
 
-      // Year-to-date calculation
+      // Cumulative from start of year through displayed month
       const yearStr = String(year);
-      const yearItems = allItems.filter(e => e.date.startsWith(yearStr));
-      const yearTotal = yearItems.reduce((s, e) => s + Number(e.amount), 0);
-      const yearRemaining = sharedData.annualBudget - yearTotal;
-      const progressPercent = Math.min((yearTotal / sharedData.annualBudget) * 100, 100);
+      const cumulativeItems = allItems.filter(e => e.date.startsWith(yearStr) && e.date <= displayedMonthKey + '-31');
+      const cumulativeTotal = cumulativeItems.reduce((s, e) => s + Number(e.amount), 0);
+      const remaining = sharedData.annualBudget - cumulativeTotal;
+      const progressPercent = Math.min((cumulativeTotal / sharedData.annualBudget) * 100, 100);
 
       // Displayed month items
       const monthItems = allItems
@@ -1632,7 +1639,7 @@
         .sort((a, b) => b.date.localeCompare(a.date));
       const monthTotal = monthItems.reduce((s, e) => s + Number(e.amount), 0);
 
-      const balancePositive = yearRemaining >= 0;
+      const balancePositive = remaining >= 0;
       const isPast = displayedMonthKey < currentMonthKey;
 
       return (
@@ -1653,17 +1660,20 @@
 
           <div onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
             <div className="rounded-3xl p-6 text-white shadow-xl mb-6" style={{ background: isPast ? 'linear-gradient(135deg, #64748b 0%, #475569 100%)' : 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)' }}>
-              <p className="text-sm mb-1 opacity-80">הוצאתם ב{monthName}</p>
-              <div className="text-4xl font-bold mb-4">{formatCurrency(monthTotal)}</div>
+              <p className="text-sm mb-1 opacity-80">סך הוצאות מינואר עד {monthName}</p>
+              <div className="flex items-baseline gap-2 mb-4 flex-wrap">
+                <span className={`text-4xl font-bold ${balancePositive ? '' : 'text-rose-100'}`}>{formatCurrency(cumulativeTotal)}</span>
+                {!balancePositive && <span className="text-rose-100 text-sm font-medium">חריגה</span>}
+              </div>
 
               <div className="space-y-1 text-xs opacity-85 mb-3 pt-3 border-t border-white/20">
                 <div className="flex items-center justify-between">
-                  <span>הוצאות מצטברות {year}</span>
-                  <span className="font-medium">{formatCurrency(yearTotal)}</span>
+                  <span>הוצאות ב{monthName}</span>
+                  <span className="font-medium">{formatCurrency(monthTotal)}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span>נשאר מהתקציב השנתי</span>
-                  <span className={`font-bold ${balancePositive ? '' : 'text-rose-200'}`}>{formatCurrency(yearRemaining)}</span>
+                  <span className={`font-bold ${balancePositive ? '' : 'text-rose-200'}`}>{formatCurrency(remaining)}</span>
                 </div>
               </div>
               <div className="w-full h-2 bg-black/20 rounded-full overflow-hidden">
