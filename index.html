@@ -1653,21 +1653,29 @@
 
           <div onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
             <div className="rounded-3xl p-6 text-white shadow-xl mb-6" style={{ background: isPast ? 'linear-gradient(135deg, #64748b 0%, #475569 100%)' : 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)' }}>
-              <p className="text-sm mb-1 opacity-80">נשאר השנה</p>
-              <div className="flex items-baseline gap-2 mb-3 flex-wrap">
-                <span className={`text-4xl font-bold ${balancePositive ? '' : 'text-rose-100'}`}>{formatCurrency(yearRemaining)}</span>
-                {!balancePositive && <span className="text-rose-100 text-sm font-medium">חריגה</span>}
+              <p className="text-sm mb-1 opacity-80">הוצאתם ב{monthName}</p>
+              <div className="text-4xl font-bold mb-4">{formatCurrency(monthTotal)}</div>
+
+              <div className="space-y-1 text-xs opacity-85 mb-3 pt-3 border-t border-white/20">
+                <div className="flex items-center justify-between">
+                  <span>הוצאות מצטברות {year}</span>
+                  <span className="font-medium">{formatCurrency(yearTotal)}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span>נשאר מהתקציב השנתי</span>
+                  <span className={`font-bold ${balancePositive ? '' : 'text-rose-200'}`}>{formatCurrency(yearRemaining)}</span>
+                </div>
               </div>
-              <div className="text-xs opacity-85 mb-2">הוצאתם {formatCurrency(yearTotal)} מתוך {formatCurrency(sharedData.annualBudget)} השנה</div>
-              <div className="w-full h-2 bg-black/20 rounded-full overflow-hidden mt-2">
+              <div className="w-full h-2 bg-black/20 rounded-full overflow-hidden">
                 <div className={`h-full transition-all ${balancePositive ? 'bg-white' : 'bg-rose-300'}`} style={{ width: `${progressPercent}%` }} />
               </div>
+              <div className="text-[10px] opacity-70 mt-1 text-center">{Math.round(progressPercent)}% מהתקציב השנתי של {formatCurrency(sharedData.annualBudget)}</div>
             </div>
 
             <div className="bg-white/80 backdrop-blur rounded-3xl p-5 shadow-sm border border-slate-200/50">
               <div className="flex items-center justify-between mb-3">
                 <h2 className="text-lg font-bold text-slate-800">הוצאות {isCurrent ? 'החודש' : `ב${monthName}`}</h2>
-                <span className="text-sm font-bold text-slate-700">{formatCurrency(monthTotal)}</span>
+                <span className="text-xs text-slate-500">{monthItems.length} פעולות</span>
               </div>
               {monthItems.length === 0 ? (
                 <p className="text-center text-slate-400 py-8">אין הוצאות בחודש זה</p>
