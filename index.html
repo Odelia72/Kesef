@@ -147,16 +147,19 @@
         }
       });
 
-      // Installments with shared toggle - one entry of total × 2 on the date shared was activated
-      const todayStr = formatDate(new Date());
-      (data.installments || []).filter(i => i.shared).forEach(i => {
-        const entryDate = i.sharedDate || todayStr;
-        items.push({
-          id: 'shl-inst-' + i.id, sourceType: 'linked-installment', linkedId: i.id,
-          supplier: i.name + ' (סה״כ ' + i.totalPayments + ' תשלומים)',
-          amount: Number(i.amount) * i.totalPayments * 2,
-          category: i.category, date: entryDate, note: i.note,
-        });
+      // Installments with shared toggle - one entry per active month (like fixed expenses)
+      (data.installments || []).filter(i => i.shared && i.startMonth).forEach(i => {
+        const [startY, startM] = i.startMonth.split('-').map(Number);
+        for (let p = 0; p < i.totalPayments; p++) {
+          const d = new Date(startY, startM - 1 + p, 1);
+          const mk = getMonthKey(d);
+          items.push({
+            id: 'shl-inst-' + i.id + '-' + mk, sourceType: 'linked-installment', linkedId: i.id,
+            supplier: i.name + ' (תשלום ' + (p + 1) + '/' + i.totalPayments + ')',
+            amount: Number(i.amount) * 2,
+            category: i.category, date: mk + '-01', note: i.note,
+          });
+        }
       });
 
       return items;
@@ -1506,8 +1509,8 @@
                     <div className={`text-sm font-medium ${installmentForm.shared ? 'text-indigo-800' : 'text-slate-700'}`}>גם הוצאה משותפת</div>
                     <div className="text-[11px] text-slate-500">
                       {installmentForm.amount && installmentForm.totalPayments
-                        ? `במשותף יופיע ${formatCurrency(Number(installmentForm.amount) * Number(installmentForm.totalPayments) * 2)} בחודש ההתחלה (סה״כ × 2)`
-                        : 'במשותף ייכתב סכום אחד יחיד של סך כל התשלומים × 2'}
+                        ? `במשותף יופיע ${formatCurrency(Number(installmentForm.amount) * 2)} בכל חודש פעיל מתוך ${installmentForm.totalPayments} (סכום חודשי × 2)`
+                        : 'במשותף יופיע כל תשלום חודשי × 2, בכל חודש פעיל'}
                     </div>
                   </div>
                 </button>
