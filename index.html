@@ -86,6 +86,7 @@
     const Users = (p) => <Icon {...p}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></Icon>;
     const User = (p) => <Icon {...p}><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></Icon>;
     const Link2 = (p) => <Icon {...p}><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><line x1="8" y1="12" x2="16" y2="12"/></Icon>;
+    const Plane = (p) => <Icon {...p}><path d="M17.8 19.2L16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z"/></Icon>;
 
     // ===== Constants =====
     const DEFAULT_CATEGORIES = ['אוכל', 'תרופות', 'ביטוחים', 'דלק ותחבורה', 'חשבונות', 'בילויים', 'ביגוד', 'בית', 'מתנות', 'אחר'];
@@ -134,16 +135,42 @@
         category: e.category, date: e.date, note: e.note,
       }));
 
-      // Fixed expenses with shared toggle - appear every month of current year
+      // Determine year range for recurring items (fixed expenses)
       const currentYear = new Date().getFullYear();
+      let minYear = currentYear - 2;
+      let maxYear = currentYear;
+      // Extend range based on linked installments (so future years are covered)
+      (data.installments || []).filter(i => i.shared && i.startMonth).forEach(i => {
+        const [startY, startM] = i.startMonth.split('-').map(Number);
+        const endMonthIdx = startM - 1 + i.totalPayments - 1;
+        const endY = startY + Math.floor(endMonthIdx / 12);
+        if (endY > maxYear) maxYear = endY;
+        if (startY < minYear) minYear = startY;
+      });
+      // Extend range based on independent shared expense dates
+      (shared.expenses || []).forEach(e => {
+        const y = parseInt(e.date.substring(0, 4));
+        if (y && y > maxYear) maxYear = y;
+        if (y && y < minYear) minYear = y;
+      });
+      // Extend range based on linked personal expenses
+      (data.expenses || []).filter(e => e.shared).forEach(e => {
+        const y = parseInt(e.date.substring(0, 4));
+        if (y && y > maxYear) maxYear = y;
+        if (y && y < minYear) minYear = y;
+      });
+
+      // Fixed expenses with shared toggle - appear every month of every relevant year
       (data.fixedExpenses || []).filter(f => f.shared).forEach(f => {
-        for (let m = 0; m < 12; m++) {
-          const mk = currentYear + '-' + String(m + 1).padStart(2, '0');
-          items.push({
-            id: 'shl-fix-' + f.id + '-' + mk, sourceType: 'linked-fixed', linkedId: f.id,
-            supplier: f.name, amount: Number(f.amount) * 2,
-            category: f.category, date: mk + '-01', note: f.note,
-          });
+        for (let y = minYear; y <= maxYear; y++) {
+          for (let m = 0; m < 12; m++) {
+            const mk = y + '-' + String(m + 1).padStart(2, '0');
+            items.push({
+              id: 'shl-fix-' + f.id + '-' + mk, sourceType: 'linked-fixed', linkedId: f.id,
+              supplier: f.name, amount: Number(f.amount) * 2,
+              category: f.category, date: mk + '-01', note: f.note,
+            });
+          }
         }
       });
 
@@ -179,11 +206,16 @@
       const [editingSharedExpense, setEditingSharedExpense] = useState(null);
       const [confirmingPlanned, setConfirmingPlanned] = useState(null);
       const [displayedMonthKey, setDisplayedMonthKey] = useState(getMonthKey(new Date()));
+      const [activeTripId, setActiveTripId] = useState(null);
+      const [showCreateTripModal, setShowCreateTripModal] = useState(false);
+      const [showAddTripExpenseModal, setShowAddTripExpenseModal] = useState(false);
+      const [editingTripExpense, setEditingTripExpense] = useState(null);
       const [data, setData] = useState({
         budget: DEFAULT_BUDGET, categories: DEFAULT_CATEGORIES,
         expenses: [], fixedExpenses: [], installments: [], paidFixed: {},
         incomes: [], plannedExpenses: [],
         shared: { annualBudget: DEFAULT_ANNUAL_BUDGET, categories: DEFAULT_SHARED_CATEGORIES, expenses: [] },
+        trips: [], currencyBalances: {},
       });
 
       useEffect(() => {
@@ -205,6 +237,8 @@
                 categories: parsed.shared?.categories ?? DEFAULT_SHARED_CATEGORIES,
                 expenses: parsed.shared?.expenses ?? [],
               },
+              trips: parsed.trips ?? [],
+              currencyBalances: parsed.currencyBalances ?? {},
             });
           }
         } catch (e) { console.error(e); }
@@ -249,6 +283,87 @@
       const removeSharedCategory = (cat) => {
         const shared = data.shared || { annualBudget: DEFAULT_ANNUAL_BUDGET, categories: DEFAULT_SHARED_CATEGORIES, expenses: [] };
         save({ ...data, shared: { ...shared, categories: shared.categories.filter(c => c !== cat) } });
+      };
+
+      // ===== Trip handlers =====
+      const tripCurrencyName = (mk, currency) => {
+        if (!mk) return `נסיעה (${currency})`;
+        const [y, m] = mk.split('-').map(Number);
+        return `${hebrewMonths[m - 1]} ${y}`;
+      };
+      const formatTripCurrency = (amount, currency) => {
+        const symbols = { GBP: '£', EUR: '€', USD: '$' };
+        const sym = symbols[currency] || currency;
+        return sym + new Intl.NumberFormat('en-US').format(Math.round((amount || 0) * 100) / 100);
+      };
+      const createTrip = ({ name, currency, startingAmount, startDate, endDate }) => {
+        const trip = {
+          id: Date.now().toString() + Math.random(),
+          name: name || tripCurrencyName(startDate, currency),
+          currency, startingAmount: Number(startingAmount) || 0,
+          startDate: startDate || undefined, endDate: endDate || undefined,
+          status: 'active', expenses: [],
+          createdAt: new Date().toISOString(),
+        };
+        // Deduct the starting amount from currency balance (we're "moving" it from the leftover pool to active trip)
+        const newBalances = { ...(data.currencyBalances || {}) };
+        save({ ...data, trips: [...(data.trips || []), trip], currencyBalances: newBalances });
+        return trip;
+      };
+      const addTripExpense = (tripId, exp) => {
+        const trips = (data.trips || []).map(t => t.id === tripId
+          ? { ...t, expenses: [...(t.expenses || []), { id: Date.now().toString() + Math.random(), ...exp }] }
+          : t);
+        save({ ...data, trips });
+      };
+      const updateTripExpense = (tripId, expId, updates) => {
+        const trips = (data.trips || []).map(t => t.id === tripId
+          ? { ...t, expenses: t.expenses.map(e => e.id === expId ? { ...e, ...updates } : e) }
+          : t);
+        save({ ...data, trips });
+      };
+      const deleteTripExpense = (tripId, expId) => {
+        const trips = (data.trips || []).map(t => t.id === tripId
+          ? { ...t, expenses: t.expenses.filter(e => e.id !== expId) }
+          : t);
+        save({ ...data, trips });
+      };
+      const updateTrip = (tripId, updates) => {
+        const trips = (data.trips || []).map(t => t.id === tripId ? { ...t, ...updates } : t);
+        save({ ...data, trips });
+      };
+      const closeTrip = (tripId) => {
+        const trip = (data.trips || []).find(t => t.id === tripId);
+        if (!trip) return;
+        const spent = (trip.expenses || []).reduce((s, e) => s + Number(e.amount), 0);
+        const leftover = (trip.startingAmount || 0) - spent;
+        const balances = { ...(data.currencyBalances || {}) };
+        balances[trip.currency] = (balances[trip.currency] || 0) + leftover;
+        const trips = (data.trips || []).map(t => t.id === tripId
+          ? { ...t, status: 'closed', closedAt: new Date().toISOString(), finalLeftover: leftover }
+          : t);
+        save({ ...data, trips, currencyBalances: balances });
+      };
+      const reopenTrip = (tripId) => {
+        const trip = (data.trips || []).find(t => t.id === tripId);
+        if (!trip) return;
+        // Return the leftover back to "in trip" status
+        const balances = { ...(data.currencyBalances || {}) };
+        if (trip.finalLeftover) balances[trip.currency] = (balances[trip.currency] || 0) - trip.finalLeftover;
+        const trips = (data.trips || []).map(t => t.id === tripId
+          ? { ...t, status: 'active', closedAt: undefined, finalLeftover: undefined }
+          : t);
+        save({ ...data, trips, currencyBalances: balances });
+      };
+      const deleteTrip = (tripId) => {
+        const trip = (data.trips || []).find(t => t.id === tripId);
+        if (!trip) return;
+        const balances = { ...(data.currencyBalances || {}) };
+        // If trip was closed, take back the leftover from balances (cancel the addition)
+        if (trip.status === 'closed' && trip.finalLeftover) {
+          balances[trip.currency] = (balances[trip.currency] || 0) - trip.finalLeftover;
+        }
+        save({ ...data, trips: (data.trips || []).filter(t => t.id !== tripId), currencyBalances: balances });
       };
       const confirmPlannedDone = (plannedId, date, paymentMethod) => {
         const planned = (data.plannedExpenses || []).find(p => p.id === plannedId);
@@ -346,6 +461,22 @@
               onTogglePaid={togglePaidFixed} />}
             {!isShared && view === 'stats' && <StatsView data={data} />}
             {!isShared && view === 'settings' && <SettingsView data={data} save={save} />}
+            {!isShared && view === 'trips' && (
+              activeTripId
+                ? <TripDetailView trip={(data.trips || []).find(t => t.id === activeTripId)}
+                    formatTripCurrency={formatTripCurrency}
+                    onBack={() => setActiveTripId(null)}
+                    onAddExpense={() => { setEditingTripExpense(null); setShowAddTripExpenseModal(true); }}
+                    onEditExpense={(e) => { setEditingTripExpense(e); setShowAddTripExpenseModal(true); }}
+                    onDeleteExpense={(id) => deleteTripExpense(activeTripId, id)}
+                    onCloseTrip={() => closeTrip(activeTripId)}
+                    onReopen={() => reopenTrip(activeTripId)}
+                    onDeleteTrip={() => { if (confirm('למחוק את הנסיעה הזו? פעולה זו לא ניתנת לביטול.')) { deleteTrip(activeTripId); setActiveTripId(null); } }} />
+                : <TripsListView data={data}
+                    formatTripCurrency={formatTripCurrency}
+                    onCreateTrip={() => setShowCreateTripModal(true)}
+                    onOpenTrip={(id) => setActiveTripId(id)} />
+            )}
 
             {isShared && view === 'home' && <SharedHomeView data={data} sharedData={sharedData}
               displayedMonthKey={displayedMonthKey} currentMonthKey={currentMonthKey}
@@ -365,6 +496,7 @@
                 className={`flex items-center justify-center w-11 h-11 rounded-full text-white shadow-md active:scale-95 transition-all ${isShared ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-blue-600 hover:bg-blue-700'}`} aria-label="הוסף פעולה">
                 <Plus className="w-5 h-5" strokeWidth={2.5} />
               </button>
+              {!isShared && <NavButton icon={<Plane className="w-5 h-5" />} label="נסיעות" active={view === 'trips'} onClick={() => { setView('trips'); setActiveTripId(null); }} />}
               <NavButton icon={<Settings className="w-5 h-5" />} label="הגדרות" active={view === 'settings'} onClick={() => setView('settings')} />
             </div>
           </nav>
@@ -383,6 +515,27 @@
               displayedMonthKey={displayedMonthKey} currentMonthKey={currentMonthKey}
               onSave={(exp) => { editingSharedExpense ? updateSharedExpense(editingSharedExpense.id, exp) : addSharedExpense(exp); closeModal(); }}
               onClose={closeModal} />
+          )}
+
+          {showCreateTripModal && (
+            <CreateTripModal
+              currencyBalances={data.currencyBalances || {}}
+              formatTripCurrency={formatTripCurrency}
+              onSave={(trip) => { const newTrip = createTrip(trip); setShowCreateTripModal(false); setActiveTripId(newTrip.id); }}
+              onClose={() => setShowCreateTripModal(false)} />
+          )}
+
+          {showAddTripExpenseModal && activeTripId && (
+            <TripExpenseModal
+              trip={(data.trips || []).find(t => t.id === activeTripId)}
+              expense={editingTripExpense}
+              formatTripCurrency={formatTripCurrency}
+              onSave={(exp) => {
+                if (editingTripExpense) updateTripExpense(activeTripId, editingTripExpense.id, exp);
+                else addTripExpense(activeTripId, exp);
+                setShowAddTripExpenseModal(false); setEditingTripExpense(null);
+              }}
+              onClose={() => { setShowAddTripExpenseModal(false); setEditingTripExpense(null); }} />
           )}
 
           {confirmingPlanned && (
@@ -1252,11 +1405,12 @@
             const incomesCount = Array.isArray(inner.incomes) ? inner.incomes.length : 0;
             const plannedCount = Array.isArray(inner.plannedExpenses) ? inner.plannedExpenses.length : 0;
             const sharedCount = Array.isArray(inner.shared?.expenses) ? inner.shared.expenses.length : 0;
+            const tripsCount = Array.isArray(inner.trips) ? inner.trips.length : 0;
             setPendingImport({
               parsed,
               fileName: file.name,
               exportedAt: parsed.exportedAt,
-              counts: { expenses: expensesCount, fixed: fixedCount, installments: installmentsCount, incomes: incomesCount, planned: plannedCount, shared: sharedCount },
+              counts: { expenses: expensesCount, fixed: fixedCount, installments: installmentsCount, incomes: incomesCount, planned: plannedCount, shared: sharedCount, trips: tripsCount },
             });
           } catch (err) {
             setImportError('הקובץ לא תקין: ' + (err?.message || 'שגיאה לא ידועה'));
@@ -1283,6 +1437,8 @@
             categories: Array.isArray(imp.shared?.categories) ? imp.shared.categories : DEFAULT_SHARED_CATEGORIES,
             expenses: Array.isArray(imp.shared?.expenses) ? imp.shared.expenses : [],
           },
+          trips: Array.isArray(imp.trips) ? imp.trips : [],
+          currencyBalances: (imp.currencyBalances && typeof imp.currencyBalances === 'object') ? imp.currencyBalances : {},
         });
         setPendingImport(null);
       };
@@ -1600,6 +1756,7 @@
                   <div className="flex justify-between"><span className="text-slate-500">הכנסות:</span><span className="text-slate-700 font-medium">{pendingImport.counts.incomes || 0}</span></div>
                   <div className="flex justify-between"><span className="text-slate-500">הוצאות מתוכננות:</span><span className="text-slate-700 font-medium">{pendingImport.counts.planned || 0}</span></div>
                   <div className="flex justify-between"><span className="text-slate-500">הוצאות משותפות:</span><span className="text-slate-700 font-medium">{pendingImport.counts.shared || 0}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-500">נסיעות:</span><span className="text-slate-700 font-medium">{pendingImport.counts.trips || 0}</span></div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-2">
@@ -1993,7 +2150,15 @@
         return sum;
       };
 
-      const yearOptions = [currentYear, currentYear - 1, currentYear - 2];
+      // Dynamic year options: past 3 years always + any year with entries (past or future)
+      const yearOptions = (() => {
+        const years = new Set([currentYear, currentYear - 1, currentYear - 2]);
+        allItems.forEach(item => {
+          const y = parseInt(item.date.substring(0, 4));
+          if (y > 0) years.add(y);
+        });
+        return [...years].sort((a, b) => b - a);
+      })();
 
       return (
         <div className="space-y-3">
@@ -2071,6 +2236,351 @@
               );
             })
           )}
+        </div>
+      );
+    }
+
+    // ===== Travel Wallet Components =====
+
+    function TripsListView({ data, formatTripCurrency, onCreateTrip, onOpenTrip }) {
+      const trips = data.trips || [];
+      const balances = data.currencyBalances || {};
+      const activeTrips = trips.filter(t => t.status === 'active');
+      const closedTrips = trips.filter(t => t.status === 'closed').sort((a, b) => (b.closedAt || '').localeCompare(a.closedAt || ''));
+      const currencyLabel = { GBP: '£ פאונד', EUR: '€ יורו', USD: '$ דולר' };
+      const balanceEntries = Object.entries(balances).filter(([_, v]) => Math.abs(v) > 0.001);
+
+      return (
+        <>
+          <div className="text-center mb-6">
+            <div className="inline-flex items-center justify-center w-14 h-14 bg-sky-100 text-sky-600 rounded-full mb-2"><Plane className="w-7 h-7" /></div>
+            <h1 className="text-3xl font-bold text-slate-800 mb-1">ארנק נסיעה</h1>
+            <p className="text-sm text-slate-500">ניהול מזומן זר לנסיעות</p>
+          </div>
+
+          {balanceEntries.length > 0 && (
+            <div className="bg-sky-50/70 border border-sky-100 rounded-2xl p-4 mb-4">
+              <div className="text-xs font-medium text-sky-900 mb-2">יתרות ממטבעות מנסיעות קודמות</div>
+              <div className="space-y-1">
+                {balanceEntries.map(([curr, amount]) => (
+                  <div key={curr} className="flex items-center justify-between text-sm">
+                    <span className="text-slate-700">{currencyLabel[curr] || curr}</span>
+                    <span className="font-bold text-sky-800">{formatTripCurrency(amount, curr)}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="text-[11px] text-slate-500 mt-2">יתרות אלו יוצעו כסכום פתיחה אוטומטי בנסיעה הבאה באותו מטבע</div>
+            </div>
+          )}
+
+          <button onClick={onCreateTrip}
+            className="w-full flex items-center justify-center gap-2 py-4 mb-5 bg-sky-600 hover:bg-sky-700 text-white rounded-2xl font-medium shadow-md transition-all active:scale-[0.98]">
+            <Plus className="w-5 h-5" strokeWidth={2.5} />
+            ארנק נסיעה חדש
+          </button>
+
+          {activeTrips.length > 0 && (
+            <div className="mb-5">
+              <h2 className="text-sm font-bold text-slate-700 mb-2 px-1">פעילות עכשיו</h2>
+              <div className="space-y-2">
+                {activeTrips.map(t => <TripCard key={t.id} trip={t} formatTripCurrency={formatTripCurrency} onClick={() => onOpenTrip(t.id)} />)}
+              </div>
+            </div>
+          )}
+
+          {closedTrips.length > 0 && (
+            <div>
+              <h2 className="text-sm font-bold text-slate-700 mb-2 px-1">ארכיון</h2>
+              <div className="space-y-2">
+                {closedTrips.map(t => <TripCard key={t.id} trip={t} formatTripCurrency={formatTripCurrency} onClick={() => onOpenTrip(t.id)} closed />)}
+              </div>
+            </div>
+          )}
+
+          {trips.length === 0 && (
+            <div className="text-center py-10 text-slate-400">
+              <p className="text-sm">אין עדיין נסיעות</p>
+              <p className="text-xs mt-1">לחיצה על הכפתור למעלה תיצור את הראשונה</p>
+            </div>
+          )}
+        </>
+      );
+    }
+
+    function TripCard({ trip, formatTripCurrency, onClick, closed }) {
+      const spent = (trip.expenses || []).reduce((s, e) => s + Number(e.amount), 0);
+      const remaining = (trip.startingAmount || 0) - spent;
+      const progressPercent = trip.startingAmount ? Math.min((spent / trip.startingAmount) * 100, 100) : 0;
+      return (
+        <button onClick={onClick}
+          className={`w-full text-right rounded-2xl p-4 transition-all active:scale-[0.99] ${closed ? 'bg-slate-100 hover:bg-slate-200 border border-slate-200' : 'bg-gradient-to-br from-sky-500 to-cyan-600 text-white shadow-md hover:shadow-lg'}`}>
+          <div className="flex items-start justify-between gap-3 mb-2">
+            <div className="min-w-0 flex-1">
+              <div className={`font-bold ${closed ? 'text-slate-800' : 'text-white'} truncate`}>{trip.name}</div>
+              {(trip.startDate || trip.endDate) && (
+                <div className={`text-[11px] ${closed ? 'text-slate-500' : 'text-sky-100'}`}>
+                  {trip.startDate ? new Date(trip.startDate).toLocaleDateString('he-IL') : ''}
+                  {trip.endDate ? ' - ' + new Date(trip.endDate).toLocaleDateString('he-IL') : ''}
+                </div>
+              )}
+            </div>
+            <div className="text-left flex-shrink-0">
+              <div className={`text-xs ${closed ? 'text-slate-500' : 'text-sky-100'}`}>{closed ? 'נותר' : 'יתרה'}</div>
+              <div className={`font-bold text-lg ${closed ? 'text-slate-800' : 'text-white'}`}>{formatTripCurrency(closed ? (trip.finalLeftover || 0) : remaining, trip.currency)}</div>
+            </div>
+          </div>
+          <div className={`text-xs ${closed ? 'text-slate-500' : 'text-sky-100'} mb-1.5`}>
+            הוצאת {formatTripCurrency(spent, trip.currency)} מתוך {formatTripCurrency(trip.startingAmount, trip.currency)}
+            {(trip.expenses || []).length > 0 && ` · ${(trip.expenses || []).length} הוצאות`}
+          </div>
+          <div className={`w-full h-1.5 rounded-full overflow-hidden ${closed ? 'bg-slate-200' : 'bg-black/20'}`}>
+            <div className={`h-full ${closed ? 'bg-slate-500' : 'bg-white'}`} style={{ width: `${progressPercent}%` }} />
+          </div>
+        </button>
+      );
+    }
+
+    function TripDetailView({ trip, formatTripCurrency, onBack, onAddExpense, onEditExpense, onDeleteExpense, onCloseTrip, onReopen, onDeleteTrip }) {
+      if (!trip) {
+        return <div className="text-center py-16 text-slate-400">הארנק לא נמצא</div>;
+      }
+      const expenses = [...(trip.expenses || [])].sort((a, b) => b.date.localeCompare(a.date));
+      const spent = expenses.reduce((s, e) => s + Number(e.amount), 0);
+      const remaining = (trip.startingAmount || 0) - spent;
+      const progressPercent = trip.startingAmount ? Math.min((spent / trip.startingAmount) * 100, 100) : 0;
+      const overBudget = remaining < 0;
+      const isClosed = trip.status === 'closed';
+
+      return (
+        <>
+          <div className="flex items-center justify-between mb-4">
+            <button onClick={onBack} className="flex items-center gap-1 text-sm text-slate-600 hover:text-slate-800">
+              <ChevronRight className="w-4 h-4" />
+              חזרה לרשימה
+            </button>
+            {isClosed ? (
+              <button onClick={onReopen} className="text-xs text-sky-600 hover:text-sky-800 font-medium">פתח מחדש</button>
+            ) : (
+              <button onClick={onDeleteTrip} className="text-xs text-rose-500 hover:text-rose-700 font-medium">מחק נסיעה</button>
+            )}
+          </div>
+
+          <div className="rounded-3xl p-6 text-white shadow-xl mb-5" style={{ background: isClosed ? 'linear-gradient(135deg, #64748b 0%, #475569 100%)' : 'linear-gradient(135deg, #0284c7 0%, #0891b2 100%)' }}>
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <p className="text-xs opacity-80 mb-0.5">{isClosed ? 'נסיעה שהסתיימה' : 'יתרה נוכחית'}</p>
+                <div className={`text-4xl font-bold ${overBudget ? 'text-rose-100' : ''}`}>{formatTripCurrency(remaining, trip.currency)}</div>
+                {overBudget && <div className="text-xs text-rose-200 mt-0.5">חריגה מהסכום</div>}
+              </div>
+              <Plane className="w-10 h-10 opacity-30" />
+            </div>
+            <div className="text-xl font-medium mb-1 opacity-90">{trip.name}</div>
+            <div className="space-y-0.5 text-xs opacity-85 mb-3">
+              <div className="flex justify-between"><span>סכום פתיחה</span><span>{formatTripCurrency(trip.startingAmount, trip.currency)}</span></div>
+              <div className="flex justify-between"><span>הוצאתי עד עכשיו</span><span>{formatTripCurrency(spent, trip.currency)}</span></div>
+              {(trip.startDate || trip.endDate) && (
+                <div className="flex justify-between"><span>תאריכים</span>
+                  <span>{trip.startDate ? new Date(trip.startDate).toLocaleDateString('he-IL') : '—'}
+                    {trip.endDate ? ' עד ' + new Date(trip.endDate).toLocaleDateString('he-IL') : ''}</span>
+                </div>
+              )}
+            </div>
+            <div className="w-full h-2 bg-black/20 rounded-full overflow-hidden">
+              <div className={`h-full ${overBudget ? 'bg-rose-300' : 'bg-white'}`} style={{ width: `${progressPercent}%` }} />
+            </div>
+          </div>
+
+          {!isClosed && (
+            <button onClick={onAddExpense}
+              className="w-full flex items-center justify-center gap-2 py-3 mb-4 bg-sky-600 hover:bg-sky-700 text-white rounded-xl font-medium transition-colors">
+              <Plus className="w-4 h-4" strokeWidth={2.5} />
+              הוסף הוצאה במזומן
+            </button>
+          )}
+
+          <div className="bg-white/80 backdrop-blur rounded-3xl p-5 shadow-sm border border-slate-200/50 mb-4">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-lg font-bold text-slate-800">הוצאות</h2>
+              <span className="text-xs text-slate-500">{expenses.length} פריטים</span>
+            </div>
+            {expenses.length === 0 ? (
+              <p className="text-center text-slate-400 py-8 text-sm">אין עדיין הוצאות. לחצי על "הוסף הוצאה" כדי להתחיל</p>
+            ) : (
+              <div className="space-y-2">
+                {expenses.map(e => {
+                  const d = new Date(e.date);
+                  return (
+                    <div key={e.id} className="flex items-center gap-3 p-3 rounded-xl bg-slate-50 hover:bg-slate-100 transition-colors group">
+                      <div className="bg-sky-100 text-sky-600 p-2 rounded-full"><Plane className="w-4 h-4" /></div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-medium text-slate-800 truncate">{e.description}</span>
+                          <span className="font-bold text-slate-700 flex-shrink-0">{formatTripCurrency(e.amount, trip.currency)}</span>
+                        </div>
+                        <div className="flex items-center justify-between text-xs text-slate-500">
+                          <span>{d.getDate()}/{d.getMonth() + 1}</span>
+                          {!isClosed && (
+                            <div className="flex items-center gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
+                              <button onClick={() => onEditExpense(e)} className="text-slate-400 hover:text-sky-600 p-1"><Edit2 className="w-3.5 h-3.5" /></button>
+                              <button onClick={() => onDeleteExpense(e.id)} className="text-slate-400 hover:text-rose-600 p-1"><Trash2 className="w-3.5 h-3.5" /></button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {!isClosed && (
+            <button onClick={() => { if (confirm('לסגור את הארנק? היתרה (' + formatTripCurrency(remaining, trip.currency) + ') תישמר ותוצע בנסיעה הבאה באותו מטבע.')) onCloseTrip(); }}
+              className="w-full py-3 bg-slate-700 hover:bg-slate-800 text-white rounded-xl font-medium">
+              סגור ארנק (סיים נסיעה)
+            </button>
+          )}
+        </>
+      );
+    }
+
+    function CreateTripModal({ currencyBalances, formatTripCurrency, onSave, onClose }) {
+      const [name, setName] = useState('');
+      const [currency, setCurrency] = useState('GBP');
+      const existingBalance = (currencyBalances || {})[currency] || 0;
+      const [startingAmount, setStartingAmount] = useState(existingBalance ? String(existingBalance) : '');
+      const [startDate, setStartDate] = useState('');
+      const [endDate, setEndDate] = useState('');
+
+      // When currency changes, update suggested starting amount
+      const onCurrencyChange = (c) => {
+        setCurrency(c);
+        const bal = (currencyBalances || {})[c] || 0;
+        if (bal > 0) setStartingAmount(String(bal));
+        else setStartingAmount('');
+      };
+
+      const canSave = Number(startingAmount) > 0;
+      const suggestedName = name.trim() || (startDate
+        ? `${hebrewMonths[new Date(startDate).getMonth()]} ${new Date(startDate).getFullYear()}`
+        : `נסיעה ${currency}`);
+
+      return (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+          <div dir="rtl" className="bg-white w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl p-6 shadow-xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-5">
+              <div className="flex items-center gap-2">
+                <Plane className="w-5 h-5 text-sky-600" />
+                <h3 className="text-xl font-bold text-slate-800">ארנק נסיעה חדש</h3>
+              </div>
+              <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-1"><X className="w-5 h-5" /></button>
+            </div>
+
+            <div className="space-y-4">
+              <Field label="מטבע">
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { code: 'GBP', label: '£ פאונד' },
+                    { code: 'EUR', label: '€ יורו' },
+                    { code: 'USD', label: '$ דולר' },
+                  ].map(c => (
+                    <button key={c.code} onClick={() => onCurrencyChange(c.code)}
+                      className={`py-3 rounded-xl border text-sm font-medium ${currency === c.code ? 'bg-sky-50 border-sky-400 text-sky-700' : 'bg-slate-50 border-slate-200 text-slate-600'}`}>
+                      {c.label}
+                    </button>
+                  ))}
+                </div>
+              </Field>
+
+              {existingBalance > 0 && (
+                <div className="bg-sky-50 border border-sky-200 rounded-xl p-3 text-xs text-sky-900">
+                  💡 יש לך {formatTripCurrency(existingBalance, currency)} שנשארו מנסיעה קודמת. הסכום הוטען לפתיחה - את יכולה לערוך ולהוסיף עוד.
+                </div>
+              )}
+
+              <Field label="סכום פתיחה">
+                <div className="relative">
+                  <input type="number" inputMode="decimal" step="0.01" value={startingAmount}
+                    onChange={(e) => setStartingAmount(e.target.value)} placeholder="0" autoFocus
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-400 text-slate-800 pl-12" />
+                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">
+                    {currency === 'GBP' ? '£' : currency === 'EUR' ? '€' : '$'}
+                  </span>
+                </div>
+              </Field>
+
+              <Field label="שם (אופציונלי)">
+                <input type="text" value={name} onChange={(e) => setName(e.target.value)}
+                  placeholder={suggestedName}
+                  className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-400 text-slate-800" />
+                {!name.trim() && <div className="text-[11px] text-slate-400 mt-1">אם תשאירי ריק - השם יהיה: {suggestedName}</div>}
+              </Field>
+
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="תאריך התחלה (אופציונלי)">
+                  <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)}
+                    className="w-full px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-400 text-slate-800 text-sm" />
+                </Field>
+                <Field label="תאריך סיום (אופציונלי)">
+                  <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)}
+                    className="w-full px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-400 text-slate-800 text-sm" />
+                </Field>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 mt-6">
+              <button onClick={onClose} className="py-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium">ביטול</button>
+              <button disabled={!canSave}
+                onClick={() => onSave({ name: name.trim() || undefined, currency, startingAmount, startDate, endDate })}
+                className="py-3 rounded-xl bg-sky-600 hover:bg-sky-700 disabled:bg-slate-300 text-white font-medium">פתח ארנק</button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function TripExpenseModal({ trip, expense, formatTripCurrency, onSave, onClose }) {
+      const [description, setDescription] = useState(expense?.description || '');
+      const [amount, setAmount] = useState(expense?.amount || '');
+      const [date, setDate] = useState(expense?.date || formatDate(new Date()));
+      const canSave = description.trim() && Number(amount) > 0;
+      const symbol = trip.currency === 'GBP' ? '£' : trip.currency === 'EUR' ? '€' : '$';
+
+      return (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+          <div dir="rtl" className="bg-white w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl p-6 shadow-xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-5">
+              <h3 className="text-xl font-bold text-slate-800">{expense ? 'עריכת הוצאה' : `הוצאה ב${symbol}`}</h3>
+              <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-1"><X className="w-5 h-5" /></button>
+            </div>
+
+            <div className="space-y-4">
+              <Field label="על מה">
+                <input type="text" value={description} onChange={(e) => setDescription(e.target.value)}
+                  placeholder="פאב, מוזיאון, אוטובוס..." autoFocus
+                  className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-400 text-slate-800" />
+              </Field>
+              <Field label="סכום">
+                <div className="relative">
+                  <input type="number" inputMode="decimal" step="0.01" value={amount}
+                    onChange={(e) => setAmount(e.target.value)} placeholder="0"
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-400 text-slate-800 pl-12" />
+                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">{symbol}</span>
+                </div>
+              </Field>
+              <Field label="תאריך">
+                <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
+                  className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-400 text-slate-800" />
+              </Field>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 mt-6">
+              <button onClick={onClose} className="py-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium">ביטול</button>
+              <button disabled={!canSave}
+                onClick={() => onSave({ description: description.trim(), amount: Number(amount), date })}
+                className="py-3 rounded-xl bg-sky-600 hover:bg-sky-700 disabled:bg-slate-300 text-white font-medium">שמירה</button>
+            </div>
+          </div>
         </div>
       );
     }
