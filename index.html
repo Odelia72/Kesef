@@ -89,7 +89,7 @@
     const Plane = (p) => <Icon {...p}><path d="M17.8 19.2L16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z"/></Icon>;
 
     // ===== Constants =====
-    const DEFAULT_CATEGORIES = ['אוכל', 'תרופות', 'ביטוחים', 'דלק ותחבורה', 'חשבונות', 'בילויים', 'ביגוד', 'בית', 'מתנות', 'אחר'];
+    const DEFAULT_CATEGORIES = ['אוכל', 'תרופות', 'ביטוחים', 'דלק ותחבורה', 'חשבונות', 'בילויים', 'ביגוד', 'בית', 'מתנות', 'ספורט', 'טיפוח', 'לימודים', 'אחר'];
     const DEFAULT_SHARED_CATEGORIES = ['רהיטים', 'חשבונות בית', 'אוכל לבית', 'חופשות', 'אחר'];
     const DEFAULT_BUDGET = 7200;
     const DEFAULT_ANNUAL_BUDGET = 30000;
@@ -225,7 +225,16 @@
             const parsed = JSON.parse(stored);
             setData({
               budget: parsed.budget ?? DEFAULT_BUDGET,
-              categories: parsed.categories ?? DEFAULT_CATEGORIES,
+              categories: (() => {
+                const existing = parsed.categories ?? DEFAULT_CATEGORIES;
+                // Auto-add new categories from defaults that are missing (one-time migration)
+                const NEW_CATEGORIES = ['ספורט', 'טיפוח', 'לימודים'];
+                const insertBeforeIdx = existing.indexOf('אחר');
+                const missing = NEW_CATEGORIES.filter(c => !existing.includes(c));
+                if (missing.length === 0) return existing;
+                if (insertBeforeIdx === -1) return [...existing, ...missing];
+                return [...existing.slice(0, insertBeforeIdx), ...missing, ...existing.slice(insertBeforeIdx)];
+              })(),
               expenses: parsed.expenses ?? [],
               fixedExpenses: parsed.fixedExpenses ?? [],
               installments: parsed.installments ?? [],
@@ -469,6 +478,7 @@
                     onAddExpense={() => { setEditingTripExpense(null); setShowAddTripExpenseModal(true); }}
                     onEditExpense={(e) => { setEditingTripExpense(e); setShowAddTripExpenseModal(true); }}
                     onDeleteExpense={(id) => deleteTripExpense(activeTripId, id)}
+                    onUpdateTrip={(updates) => updateTrip(activeTripId, updates)}
                     onCloseTrip={() => closeTrip(activeTripId)}
                     onReopen={() => reopenTrip(activeTripId)}
                     onDeleteTrip={() => { if (confirm('למחוק את הנסיעה הזו? פעולה זו לא ניתנת לביטול.')) { deleteTrip(activeTripId); setActiveTripId(null); } }} />
@@ -2340,7 +2350,8 @@
       );
     }
 
-    function TripDetailView({ trip, formatTripCurrency, onBack, onAddExpense, onEditExpense, onDeleteExpense, onCloseTrip, onReopen, onDeleteTrip }) {
+    function TripDetailView({ trip, formatTripCurrency, onBack, onAddExpense, onEditExpense, onDeleteExpense, onUpdateTrip, onCloseTrip, onReopen, onDeleteTrip }) {
+      const [showEdit, setShowEdit] = useState(false);
       if (!trip) {
         return <div className="text-center py-16 text-slate-400">הארנק לא נמצא</div>;
       }
@@ -2350,6 +2361,7 @@
       const progressPercent = trip.startingAmount ? Math.min((spent / trip.startingAmount) * 100, 100) : 0;
       const overBudget = remaining < 0;
       const isClosed = trip.status === 'closed';
+      const symbol = trip.currency === 'GBP' ? '£' : trip.currency === 'EUR' ? '€' : '$';
 
       return (
         <>
@@ -2361,7 +2373,13 @@
             {isClosed ? (
               <button onClick={onReopen} className="text-xs text-sky-600 hover:text-sky-800 font-medium">פתח מחדש</button>
             ) : (
-              <button onClick={onDeleteTrip} className="text-xs text-rose-500 hover:text-rose-700 font-medium">מחק נסיעה</button>
+              <div className="flex items-center gap-3">
+                <button onClick={() => setShowEdit(true)} className="text-xs text-sky-600 hover:text-sky-800 font-medium flex items-center gap-1">
+                  <Edit2 className="w-3 h-3" />
+                  ערוך
+                </button>
+                <button onClick={onDeleteTrip} className="text-xs text-rose-500 hover:text-rose-700 font-medium">מחק נסיעה</button>
+              </div>
             )}
           </div>
 
@@ -2440,7 +2458,73 @@
               סגור ארנק (סיים נסיעה)
             </button>
           )}
+
+          {showEdit && (
+            <EditTripModal trip={trip} symbol={symbol}
+              onSave={(updates) => { onUpdateTrip(updates); setShowEdit(false); }}
+              onClose={() => setShowEdit(false)} />
+          )}
         </>
+      );
+    }
+
+    function EditTripModal({ trip, symbol, onSave, onClose }) {
+      const [name, setName] = useState(trip.name || '');
+      const [startingAmount, setStartingAmount] = useState(String(trip.startingAmount || ''));
+      const [startDate, setStartDate] = useState(trip.startDate || '');
+      const [endDate, setEndDate] = useState(trip.endDate || '');
+      const canSave = name.trim() && Number(startingAmount) > 0;
+
+      return (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+          <div dir="rtl" className="bg-white w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl p-6 shadow-xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-5">
+              <div className="flex items-center gap-2">
+                <Edit2 className="w-5 h-5 text-sky-600" />
+                <h3 className="text-xl font-bold text-slate-800">עריכת ארנק נסיעה</h3>
+              </div>
+              <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-1"><X className="w-5 h-5" /></button>
+            </div>
+
+            <div className="bg-sky-50/60 border border-sky-100 rounded-xl p-3 mb-4 text-[11px] text-sky-900 leading-relaxed">
+              💡 שינוי <strong>סכום הפתיחה</strong> כאן שימושי אם גילית שהיה לך פחות מזומן ממה שחשבת. ההוצאות שכבר רשמת לא ישתנו - רק היתרה תתעדכן בהתאם.
+            </div>
+
+            <div className="space-y-4">
+              <Field label="שם הארנק">
+                <input type="text" value={name} onChange={(e) => setName(e.target.value)}
+                  className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-400 text-slate-800" />
+              </Field>
+
+              <Field label="סכום פתיחה">
+                <div className="relative">
+                  <input type="number" inputMode="decimal" step="0.01" value={startingAmount}
+                    onChange={(e) => setStartingAmount(e.target.value)}
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-400 text-slate-800 pl-12" />
+                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">{symbol}</span>
+                </div>
+              </Field>
+
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="תאריך התחלה">
+                  <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)}
+                    className="w-full px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-400 text-slate-800 text-sm" />
+                </Field>
+                <Field label="תאריך סיום">
+                  <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)}
+                    className="w-full px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-400 text-slate-800 text-sm" />
+                </Field>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 mt-6">
+              <button onClick={onClose} className="py-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium">ביטול</button>
+              <button disabled={!canSave}
+                onClick={() => onSave({ name: name.trim(), startingAmount: Number(startingAmount), startDate: startDate || undefined, endDate: endDate || undefined })}
+                className="py-3 rounded-xl bg-sky-600 hover:bg-sky-700 disabled:bg-slate-300 text-white font-medium">שמירה</button>
+            </div>
+          </div>
+        </div>
       );
     }
 
