@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>אבחון אפליקציה</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; background:#0f172a; color:#e2e8f0; margin:0; padding:16px; font-size:17px; line-height:1.5; }
+  h1 { font-size:21px; margin:0 0 4px; }
+  .sub { color:#94a3b8; font-size:14px; margin-bottom:16px; }
+  .row { background:#1e293b; border-radius:10px; padding:12px 14px; margin:8px 0; display:flex; align-items:flex-start; gap:10px; word-break:break-word; }
+  .ico { font-size:20px; flex-shrink:0; }
+  .ok { color:#4ade80; }
+  .bad { color:#f87171; }
+  .pending { color:#fbbf24; }
+  .name { font-weight:600; }
+  .detail { color:#94a3b8; font-size:14px; margin-top:2px; }
+  #verdict { margin-top:20px; padding:16px; border-radius:12px; font-size:18px; font-weight:600; display:none; }
+  #verdict.good { background:#064e3b; color:#a7f3d0; }
+  #verdict.bad { background:#7f1d1d; color:#fecaca; }
+  code { background:#334155; padding:1px 5px; border-radius:4px; font-size:14px; }
+</style>
+</head>
+<body>
+  <h1>🔧 אבחון אפליקציה</h1>
+  <div class="sub">הקובץ הזה בודק כל חלק בנפרד. תני לזה כמה שניות, ואז צלמי מסך ושלחי לקלוד.</div>
+  <div id="log"></div>
+  <div id="verdict"></div>
+
+<script>
+const log = document.getElementById('log');
+const results = [];
+function add(name) {
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.innerHTML = '<span class="ico pending">⏳</span><div><div class="name">'+name+'</div><div class="detail">בודק...</div></div>';
+  log.appendChild(row);
+  return {
+    ok(msg){ row.querySelector('.ico').className='ico ok'; row.querySelector('.ico').textContent='✅'; row.querySelector('.detail').textContent=msg||'תקין'; results.push({name,ok:true}); },
+    bad(msg){ row.querySelector('.ico').className='ico bad'; row.querySelector('.ico').textContent='❌'; row.querySelector('.detail').textContent=msg||'נכשל'; results.push({name,ok:false}); }
+  };
+}
+
+// catch any uncaught error and show it big
+const globalErrs = [];
+window.addEventListener('error', e => {
+  globalErrs.push((e.message||'') + (e.filename? ' @ '+e.filename.split('/').pop():''));
+});
+
+function loadScript(url){
+  return new Promise((resolve,reject)=>{
+    const s=document.createElement('script');
+    s.src=url; s.onload=()=>resolve(); s.onerror=()=>reject(new Error('הקובץ לא נטען (404 או חסום): '+url));
+    document.head.appendChild(s);
+  });
+}
+
+async function step(name, url, globalName){
+  const t = add(name);
+  try {
+    await loadScript(url);
+    if (globalName && typeof window[globalName] === 'undefined') {
+      t.bad('הקובץ נטען אבל לא יצר את "'+globalName+'" — כנראה גרסה לא תואמת');
+      return false;
+    }
+    t.ok('נטען בהצלחה' + (globalName? ' (נמצא '+globalName+')':''));
+    return true;
+  } catch(e){
+    t.bad(e.message);
+    return false;
+  }
+}
+
+(async function(){
+  // 1-6: the exact scripts the apps load
+  const r1 = await step('React (ליבה)', 'https://unpkg.com/react@18/umd/react.production.min.js', 'React');
+  const r2 = await step('ReactDOM', 'https://unpkg.com/react-dom@18/umd/react-dom.production.min.js', 'ReactDOM');
+  await step('react-is', 'https://unpkg.com/react-is@18/umd/react-is.production.min.js', 'ReactIs');
+  await step('prop-types', 'https://unpkg.com/prop-types/prop-types.min.js', 'PropTypes');
+  const rRech = await step('Recharts (גרפים — רק ב-Kesef)', 'https://unpkg.com/recharts/umd/Recharts.js', 'Recharts');
+  const rBabel = await step('Babel (מתרגם הקוד)', 'https://unpkg.com/@babel/standalone/babel.min.js', 'Babel');
+
+  // report which babel version actually loaded
+  if (rBabel && window.Babel) {
+    const t = add('גרסת Babel שנטענה בפועל');
+    t.ok('גרסה ' + (window.Babel.version || 'לא ידוע'));
+  }
+  if (rRech && window.Recharts) {
+    const t = add('בדיקת רכיב גרף ב-Recharts');
+    (typeof window.Recharts.LineChart === 'function') ? t.ok('רכיב הגרף קיים') : t.bad('רכיב הגרף LineChart חסר — גרסה לא תואמת!');
+  }
+
+  // 7: full pipeline test — transform JSX and render, exactly like the apps do
+  const t7 = add('בדיקת המנגנון המלא (תרגום + הצגה על מסך)');
+  if (r1 && r2 && rBabel) {
+    try {
+      const jsx = 'function T(){return React.createElement("span",null,"בדיקה הצליחה");} ' +
+                  'ReactDOM.createRoot(document.getElementById("probe")).render(React.createElement(T));';
+      // emulate the apps: Babel transforms a text/babel block
+      const probe = document.createElement('div'); probe.id='probe'; document.body.appendChild(probe);
+      const compiled = Babel.transform('const x = (<b>hi</b>); ' , {presets:['react']}).code; // does JSX transform work?
+      // run a real render
+      new Function('React','ReactDOM', jsx)(window.React, window.ReactDOM);
+      await new Promise(r=>setTimeout(r,150));
+      if (probe.textContent.includes('בדיקה הצליחה')) t7.ok('המסך התמלא בתוכן — המנגנון עובד מקצה לקצה');
+      else t7.bad('התרגום עבר אבל שום דבר לא הוצג על המסך');
+    } catch(e){
+      t7.bad('שגיאה: ' + (e.message||e).split('\n')[0]);
+    }
+  } else {
+    t7.bad('דילגתי — חלק מהספריות שמעל לא נטענו');
+  }
+
+  // final verdict
+  const v = document.getElementById('verdict');
+  v.style.display='block';
+  const failed = results.filter(r=>!r.ok);
+  if (globalErrs.length) {
+    v.className='bad';
+    v.innerHTML = '⚠️ נתפסה שגיאה: <br><code>'+globalErrs.join('<br>')+'</code><br><br>צלמי מסך ושלחי לקלוד.';
+  } else if (failed.length===0) {
+    v.className='good';
+    v.innerHTML = '✅ הכל עבד כאן! זה אומר שהבעיה כנראה בזיכרון המטמון (cache) של הדפדפן בלבד. תגידי לקלוד — יש פתרון פשוט.';
+  } else {
+    v.className='bad';
+    v.innerHTML = '❌ נמצאה הבעיה! מה שנכשל: <br>• ' + failed.map(f=>f.name).join('<br>• ') + '<br><br>צלמי מסך ושלחי לקלוד — עכשיו נדע בדיוק מה לתקן.';
+  }
+})();
+</script>
+</body>
+</html>
