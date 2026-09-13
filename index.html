@@ -22,9 +22,9 @@
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-is@18/umd/react-is.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
-  <script crossorigin src="https://unpkg.com/recharts@2.15.4/umd/Recharts.js"></script>
-  <script src="https://unpkg.com/@babel/standalone@7.29.7/babel.min.js"></script>
+  <script crossorigin src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+  <script crossorigin src="https://unpkg.com/recharts/umd/Recharts.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
   <style>
     html, body {
@@ -115,6 +115,25 @@
       const n = getInstallmentNumber(i, mk);
       return n >= 1 && n <= i.totalPayments;
     };
+    // Determines if a fixed expense is active in a given month based on frequency
+    // Rules: monthly = every month. quarterly = every 3 months starting from frequencyMonth (fm, fm+3, fm+6, fm+9).
+    // annual = only in frequencyMonth.
+    const isFixedActiveInMonth = (f, mk) => {
+      const freq = f.frequency || 'monthly';
+      if (freq === 'monthly') return true;
+      const monthNum = Number(mk.split('-')[1]);
+      const fm = f.frequencyMonth || 1;
+      if (freq === 'annual') return monthNum === fm;
+      if (freq === 'quarterly') {
+        // Active months are fm, fm+3, fm+6, fm+9 (with wrap-around modulo 12)
+        for (let k = 0; k < 4; k++) {
+          const activeMonth = ((fm - 1 + k * 3) % 12) + 1;
+          if (activeMonth === monthNum) return true;
+        }
+        return false;
+      }
+      return true;
+    };
     const getQuarter = (d) => Math.floor(d.getMonth() / 3) + 1;
 
     // Computes the unified list of items visible in shared space:
@@ -160,11 +179,12 @@
         if (y && y < minYear) minYear = y;
       });
 
-      // Fixed expenses with shared toggle - appear every month of every relevant year
+      // Fixed expenses with shared toggle - appear only in active months (based on frequency)
       (data.fixedExpenses || []).filter(f => f.shared).forEach(f => {
         for (let y = minYear; y <= maxYear; y++) {
           for (let m = 0; m < 12; m++) {
             const mk = y + '-' + String(m + 1).padStart(2, '0');
+            if (!isFixedActiveInMonth(f, mk)) continue;
             items.push({
               id: 'shl-fix-' + f.id + '-' + mk, sourceType: 'linked-fixed', linkedId: f.id,
               supplier: f.name, amount: Number(f.amount) * 2,
@@ -212,7 +232,7 @@
       const [editingTripExpense, setEditingTripExpense] = useState(null);
       const [data, setData] = useState({
         budget: DEFAULT_BUDGET, categories: DEFAULT_CATEGORIES,
-        expenses: [], fixedExpenses: [], installments: [], paidFixed: {},
+        expenses: [], fixedExpenses: [], installments: [], paidFixed: {}, paidInstallments: {},
         incomes: [], plannedExpenses: [],
         shared: { annualBudget: DEFAULT_ANNUAL_BUDGET, categories: DEFAULT_SHARED_CATEGORIES, expenses: [] },
         trips: [], currencyBalances: {},
@@ -239,6 +259,7 @@
               fixedExpenses: parsed.fixedExpenses ?? [],
               installments: parsed.installments ?? [],
               paidFixed: parsed.paidFixed ?? {},
+              paidInstallments: parsed.paidInstallments ?? {},
               incomes: parsed.incomes ?? [],
               plannedExpenses: parsed.plannedExpenses ?? [],
               shared: {
@@ -393,6 +414,11 @@
         const newPaid = paid.includes(fixedId) ? paid.filter(id => id !== fixedId) : [...paid, fixedId];
         save({ ...data, paidFixed: { ...data.paidFixed, [mk]: newPaid } });
       };
+      const togglePaidInstallment = (installmentId, mk) => {
+        const paid = data.paidInstallments?.[mk] || [];
+        const newPaid = paid.includes(installmentId) ? paid.filter(id => id !== installmentId) : [...paid, installmentId];
+        save({ ...data, paidInstallments: { ...data.paidInstallments, [mk]: newPaid } });
+      };
 
       const now = new Date();
       const currentMonthKey = getMonthKey(now);
@@ -400,7 +426,7 @@
       const displayedMonthIncomes = (data.incomes || []).filter(i => i.date.startsWith(displayedMonthKey));
       const displayedMonthVariable = displayedMonthExpenses.reduce((s, e) => s + Number(e.amount), 0);
       const displayedMonthIncome = displayedMonthIncomes.reduce((s, i) => s + Number(i.amount), 0);
-      const displayedMonthFixed = data.fixedExpenses.reduce((s, e) => s + Number(e.amount), 0);
+      const displayedMonthFixed = data.fixedExpenses.filter(f => isFixedActiveInMonth(f, displayedMonthKey)).reduce((s, e) => s + Number(e.amount), 0);
       const displayedMonthInstallments = data.installments
         .filter(i => isInstallmentActiveInMonth(i, displayedMonthKey))
         .reduce((s, i) => s + Number(i.amount), 0);
@@ -467,7 +493,8 @@
               onEditPlanned={(p) => { setEditingPlanned(p); setEditingExpense(null); setEditingIncome(null); setShowAddModal(true); }}
               onDelete={deleteExpense} onDeleteIncome={deleteIncome} onDeletePlanned={deletePlanned}
               onConfirmPlanned={(p) => setConfirmingPlanned(p)}
-              onTogglePaid={togglePaidFixed} />}
+              onTogglePaid={togglePaidFixed}
+              onTogglePaidInstallment={togglePaidInstallment} />}
             {!isShared && view === 'stats' && <StatsView data={data} />}
             {!isShared && view === 'settings' && <SettingsView data={data} save={save} />}
             {!isShared && view === 'trips' && (
@@ -568,7 +595,7 @@
     function HomeView({ data, displayedMonthKey, currentMonthKey, balance, totalSpent, monthlyIncome, plannedTotal, projectedBalance,
                          displayedMonthExpenses, displayedMonthIncomes, displayedMonthPlanned,
                          onPrevMonth, onNextMonth, onCurrentMonth,
-                         onEdit, onEditIncome, onEditPlanned, onDelete, onDeleteIncome, onDeletePlanned, onConfirmPlanned, onTogglePaid }) {
+                         onEdit, onEditIncome, onEditPlanned, onDelete, onDeleteIncome, onDeletePlanned, onConfirmPlanned, onTogglePaid, onTogglePaidInstallment }) {
       const balancePositive = balance >= 0;
       const isCurrent = displayedMonthKey === currentMonthKey;
       const [year, monthNum] = displayedMonthKey.split('-').map(Number);
@@ -578,17 +605,20 @@
       const progressPercent = Math.min((totalSpent / data.budget) * 100, 100);
       const paidThisMonth = data.paidFixed?.[displayedMonthKey] || [];
 
-      const fixedItems = data.fixedExpenses.map(f => ({
+      const fixedItems = data.fixedExpenses.filter(f => isFixedActiveInMonth(f, displayedMonthKey)).map(f => ({
         id: 'fixed-' + f.id, fixedId: f.id, supplier: f.name, amount: f.amount, category: f.category,
         paymentMethod: f.paymentMethod || 'credit', date: displayedMonthKey + '-01', note: f.note,
-        isFixed: true, requiresConfirmation: f.requiresConfirmation, shared: f.shared,
+        isFixed: true, requiresConfirmation: f.requiresConfirmation, shared: f.shared, frequency: f.frequency,
         isPaid: !f.requiresConfirmation || paidThisMonth.includes(f.id),
       }));
 
+      const paidInstallmentsThisMonth = data.paidInstallments?.[displayedMonthKey] || [];
       const activeInstallments = data.installments.filter(i => isInstallmentActiveInMonth(i, displayedMonthKey)).map(i => ({
-        id: 'installment-' + i.id, supplier: i.name, amount: i.amount, category: i.category,
+        id: 'installment-' + i.id, installmentId: i.id, supplier: i.name, amount: i.amount, category: i.category,
         paymentMethod: 'credit', date: displayedMonthKey + '-01', note: i.note, isInstallment: true, shared: i.shared,
         installmentNumber: getInstallmentNumber(i, displayedMonthKey), totalPayments: i.totalPayments,
+        requiresConfirmation: i.requiresConfirmation,
+        isPaid: !i.requiresConfirmation || paidInstallmentsThisMonth.includes(i.id),
       }));
 
       const incomeItems = (displayedMonthIncomes || []).map(inc => ({
@@ -675,7 +705,11 @@
                         : exp.isPlanned ? () => onDeletePlanned(exp.plannedId)
                         : (exp.isFixed || exp.isInstallment) ? null : () => onDelete(exp.id)}
                       onConfirmPlanned={exp.isPlanned ? () => onConfirmPlanned(exp.rawPlanned) : null}
-                      onTogglePaid={exp.isFixed && exp.requiresConfirmation ? () => onTogglePaid(exp.fixedId, displayedMonthKey) : null} />
+                      onTogglePaid={
+                        exp.isFixed && exp.requiresConfirmation ? () => onTogglePaid(exp.fixedId, displayedMonthKey)
+                        : exp.isInstallment && exp.requiresConfirmation ? () => onTogglePaidInstallment(exp.installmentId, displayedMonthKey)
+                        : null
+                      } />
                   ))}
                 </div>
               )}
@@ -689,7 +723,7 @@
       const date = new Date(expense.date);
       const dayMonth = `${date.getDate()}/${date.getMonth() + 1}`;
       const PaymentIcon = expense.paymentMethod === 'cash' ? Wallet : CreditCard;
-      const isPending = expense.isFixed && expense.requiresConfirmation && !expense.isPaid;
+      const isPending = ((expense.isFixed || expense.isInstallment)) && expense.requiresConfirmation && !expense.isPaid;
       const isIncome = expense.isIncome;
       const isPlanned = expense.isPlanned;
 
@@ -709,7 +743,7 @@
             <div className="bg-emerald-100 text-emerald-600 p-2 rounded-full"><TrendingUp className="w-4 h-4" strokeWidth={2.5} /></div>
           ) : isPending ? (
             <div className="bg-white border-2 border-slate-300 p-1.5 rounded-full"><Circle className="w-4 h-4 text-slate-300" /></div>
-          ) : expense.isFixed && expense.requiresConfirmation && expense.isPaid ? (
+          ) : (expense.isFixed || expense.isInstallment) && expense.requiresConfirmation && expense.isPaid ? (
             <div className="bg-emerald-100 text-emerald-600 p-2 rounded-full"><Check className="w-4 h-4" strokeWidth={3} /></div>
           ) : expense.isInstallment ? (
             <div className="bg-purple-100 text-purple-600 p-2 rounded-full"><Repeat className="w-4 h-4" /></div>
@@ -734,7 +768,9 @@
                   </span>
                 )}
                 {expense.isInstallment && (
-                  <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full flex-shrink-0">תשלום {expense.installmentNumber}/{expense.totalPayments}</span>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0 ${isPending ? 'bg-slate-200 text-slate-500' : 'bg-purple-100 text-purple-700'}`}>
+                    {isPending ? `ממתין לתשלום · ${expense.installmentNumber}/${expense.totalPayments}` : `תשלום ${expense.installmentNumber}/${expense.totalPayments}`}
+                  </span>
                 )}
                 {expense.shared && (
                   <span className="text-[10px] bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded-full flex-shrink-0 flex items-center gap-0.5">
@@ -1021,11 +1057,11 @@
       const currentYear = now.getFullYear();
       const currentMonthKey = getMonthKey(now);
       const monthExpenses = data.expenses.filter(e => e.date.startsWith(currentMonthKey));
-      const fixedTotal = data.fixedExpenses.reduce((s, e) => s + Number(e.amount), 0);
+      const activeFixedCurrent = data.fixedExpenses.filter(f => isFixedActiveInMonth(f, currentMonthKey));
 
       const categoryTotals = {};
       monthExpenses.forEach(e => { categoryTotals[e.category] = (categoryTotals[e.category] || 0) + Number(e.amount); });
-      data.fixedExpenses.forEach(e => { categoryTotals[e.category] = (categoryTotals[e.category] || 0) + Number(e.amount); });
+      activeFixedCurrent.forEach(e => { categoryTotals[e.category] = (categoryTotals[e.category] || 0) + Number(e.amount); });
       data.installments.filter(i => isInstallmentActiveInMonth(i, currentMonthKey)).forEach(i => { categoryTotals[i.category] = (categoryTotals[i.category] || 0) + Number(i.amount); });
 
       const pieData = Object.entries(categoryTotals).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
@@ -1034,10 +1070,30 @@
       for (let m = 0; m < 12; m++) {
         const mk = currentYear + '-' + String(m + 1).padStart(2, '0');
         const monthExp = data.expenses.filter(e => e.date.startsWith(mk)).reduce((s, e) => s + Number(e.amount), 0);
+        const monthFixed = data.fixedExpenses.filter(f => isFixedActiveInMonth(f, mk)).reduce((s, e) => s + Number(e.amount), 0);
         const inst = data.installments.filter(i => isInstallmentActiveInMonth(i, mk)).reduce((s, i) => s + Number(i.amount), 0);
         const monthInc = (data.incomes || []).filter(i => i.date.startsWith(mk)).reduce((s, i) => s + Number(i.amount), 0);
-        const total = monthExp + fixedTotal + inst;
+        const total = monthExp + monthFixed + inst;
         yearData.push({ month: hebrewMonthsShort[m], balance: Math.round(data.budget - total + monthInc), expenses: Math.round(total), incomes: Math.round(monthInc) });
+      }
+
+      // Cumulative YTD summary through last completed month
+      const lastCompletedMonthIdx = now.getMonth() - 1; // 0-based; -1 if we're in January
+      let ytdSummary = null;
+      if (lastCompletedMonthIdx >= 0) {
+        const monthsPassed = lastCompletedMonthIdx + 1;
+        const cumBudget = data.budget * monthsPassed;
+        let cumSpent = 0;
+        for (let m = 0; m <= lastCompletedMonthIdx; m++) {
+          cumSpent += yearData[m].expenses;
+        }
+        ytdSummary = {
+          monthName: hebrewMonths[lastCompletedMonthIdx],
+          monthsPassed,
+          cumBudget,
+          cumSpent,
+          balance: cumBudget - cumSpent,
+        };
       }
 
       return (
@@ -1095,6 +1151,27 @@
           <div className="bg-white/80 backdrop-blur rounded-3xl p-5 shadow-sm border border-slate-200/50 mb-4">
             <h2 className="text-lg font-bold text-slate-800 mb-1">יתרה שנתית</h2>
             <p className="text-xs text-slate-500 mb-4">חיובי = נשאר תקציב · שלילי = חריגה</p>
+
+            {ytdSummary && (
+              <div className={`rounded-2xl p-4 mb-4 border ${ytdSummary.balance >= 0 ? 'bg-blue-50/70 border-blue-200' : 'bg-rose-50/70 border-rose-200'}`}>
+                <div className="text-xs text-slate-600 mb-1">מצטבר עד סוף {ytdSummary.monthName}</div>
+                <div className={`text-3xl font-bold mb-2 ${ytdSummary.balance >= 0 ? 'text-blue-700' : 'text-rose-700'}`}>
+                  {ytdSummary.balance >= 0 ? '+' : ''}{formatCurrency(ytdSummary.balance)}
+                </div>
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div>
+                    <div className="text-slate-500">תקציב מצטבר</div>
+                    <div className="font-medium text-slate-700">{formatCurrency(ytdSummary.cumBudget)}</div>
+                    <div className="text-[10px] text-slate-400">{ytdSummary.monthsPassed} × {formatCurrency(data.budget)}</div>
+                  </div>
+                  <div>
+                    <div className="text-slate-500">הוצאת בפועל</div>
+                    <div className="font-medium text-slate-700">{formatCurrency(ytdSummary.cumSpent)}</div>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={yearData} margin={{ top: 5, right: 5, left: 5, bottom: 5 }}>
@@ -1143,17 +1220,18 @@
         const variableExp = data.expenses.filter(e => e.date.startsWith(mk));
         const incomes = (data.incomes || []).filter(i => i.date.startsWith(mk));
         const activeInst = installmentsList.filter(i => isInstallmentActiveInMonth(i, mk));
+        const activeFixed = fixedItems.filter(f => isFixedActiveInMonth(f, mk));
 
         const items = [];
         variableExp.forEach(e => items.push({ ...e, isVariable: true, sortDate: e.date }));
-        fixedItems.forEach(f => items.push({ id: 'fix-' + f.id + '-' + mk, supplier: f.name, amount: f.amount, category: f.category, paymentMethod: f.paymentMethod || 'credit', date: mk + '-01', sortDate: mk + '-01', isFixed: true, note: f.note }));
+        activeFixed.forEach(f => items.push({ id: 'fix-' + f.id + '-' + mk, supplier: f.name, amount: f.amount, category: f.category, paymentMethod: f.paymentMethod || 'credit', date: mk + '-01', sortDate: mk + '-01', isFixed: true, note: f.note }));
         activeInst.forEach(i => items.push({ id: 'inst-' + i.id + '-' + mk, supplier: i.name, amount: i.amount, category: i.category, date: mk + '-01', sortDate: mk + '-01', isInstallment: true, installmentNumber: getInstallmentNumber(i, mk), totalPayments: i.totalPayments }));
         incomes.forEach(inc => items.push({ id: 'inc-' + inc.id, supplier: inc.description, amount: inc.amount, date: inc.date, sortDate: inc.date, isIncome: true }));
 
         items.sort((a, b) => b.sortDate.localeCompare(a.sortDate));
 
         const totalExp = variableExp.reduce((s, e) => s + Number(e.amount), 0)
-          + fixedItems.reduce((s, f) => s + Number(f.amount), 0)
+          + activeFixed.reduce((s, f) => s + Number(f.amount), 0)
           + activeInst.reduce((s, i) => s + Number(i.amount), 0);
         const totalInc = incomes.reduce((s, i) => s + Number(i.amount), 0);
         const net = totalExp - totalInc;
@@ -1253,9 +1331,17 @@
         categoryStats[e.category].count++;
       });
       data.fixedExpenses.forEach(f => {
-        if (!categoryStats[f.category]) categoryStats[f.category] = { total: 0, count: 0 };
-        categoryStats[f.category].total += Number(f.amount) * monthsCount;
-        categoryStats[f.category].count += monthsCount;
+        // Count how many months in this quarter this fixed expense is actually active
+        let activeMonthsInQuarter = 0;
+        monthKeys.forEach(mk => {
+          const [y, m] = mk.split('-').map(Number);
+          if (new Date(y, m - 1, 1) <= now && isFixedActiveInMonth(f, mk)) activeMonthsInQuarter++;
+        });
+        if (activeMonthsInQuarter > 0) {
+          if (!categoryStats[f.category]) categoryStats[f.category] = { total: 0, count: 0 };
+          categoryStats[f.category].total += Number(f.amount) * activeMonthsInQuarter;
+          categoryStats[f.category].count += activeMonthsInQuarter;
+        }
       });
       monthKeys.forEach(mk => {
         data.installments.filter(i => isInstallmentActiveInMonth(i, mk)).forEach(i => {
@@ -1299,6 +1385,16 @@
                   <span className="font-medium text-slate-700">סה״כ הוצאות ברבעון</span>
                   <span className="font-bold text-slate-800">{formatCurrency(totalSpent)}</span>
                 </div>
+                {(() => {
+                  const quarterBudget = data.budget * monthsCount;
+                  const balance = quarterBudget - totalSpent + totalIncome;
+                  return (
+                    <div className={`mb-4 flex items-center justify-between text-sm px-3 py-2 rounded-xl -mt-2 ${balance >= 0 ? 'bg-blue-50/70' : 'bg-rose-50/70'}`}>
+                      <span className={`font-medium ${balance >= 0 ? 'text-blue-800' : 'text-rose-800'}`}>יתרה ברבעון</span>
+                      <span className={`font-bold ${balance >= 0 ? 'text-blue-800' : 'text-rose-800'}`}>{balance >= 0 ? '+' : ''}{formatCurrency(balance)}</span>
+                    </div>
+                  );
+                })()}
                 {totalIncome > 0 && (
                   <div className="mb-4 flex items-center justify-between text-sm px-1 -mt-2">
                     <span className="font-medium text-emerald-700 flex items-center gap-1.5">
@@ -1361,8 +1457,8 @@
       const [newCategory, setNewCategory] = useState('');
       const [showAddFixed, setShowAddFixed] = useState(false);
       const [showAddInstallment, setShowAddInstallment] = useState(false);
-      const [fixedForm, setFixedForm] = useState({ name: '', amount: '', category: data.categories[0] || '', paymentMethod: 'credit', requiresConfirmation: false, shared: false, note: '' });
-      const [installmentForm, setInstallmentForm] = useState({ name: '', amount: '', totalPayments: '', startMonth: getMonthKey(new Date()), category: data.categories[0] || '', shared: false, note: '' });
+      const [fixedForm, setFixedForm] = useState({ name: '', amount: '', category: data.categories[0] || '', paymentMethod: 'credit', requiresConfirmation: false, shared: false, frequency: 'monthly', frequencyMonth: 1, note: '' });
+      const [installmentForm, setInstallmentForm] = useState({ name: '', amount: '', totalPayments: '', startMonth: getMonthKey(new Date()), category: data.categories[0] || '', shared: false, requiresConfirmation: false, note: '' });
 
       // ===== Backup state =====
       const [pendingImport, setPendingImport] = useState(null);
@@ -1440,6 +1536,7 @@
           fixedExpenses: Array.isArray(imp.fixedExpenses) ? imp.fixedExpenses : [],
           installments: Array.isArray(imp.installments) ? imp.installments : [],
           paidFixed: (imp.paidFixed && typeof imp.paidFixed === 'object') ? imp.paidFixed : {},
+          paidInstallments: (imp.paidInstallments && typeof imp.paidInstallments === 'object') ? imp.paidInstallments : {},
           incomes: Array.isArray(imp.incomes) ? imp.incomes : [],
           plannedExpenses: Array.isArray(imp.plannedExpenses) ? imp.plannedExpenses : [],
           shared: {
@@ -1474,8 +1571,8 @@
 
       const addFixed = () => {
         if (!fixedForm.name.trim() || !Number(fixedForm.amount)) return;
-        save({ ...data, fixedExpenses: [...data.fixedExpenses, { id: Date.now().toString(), name: fixedForm.name.trim(), amount: Number(fixedForm.amount), category: fixedForm.category, paymentMethod: fixedForm.paymentMethod, requiresConfirmation: fixedForm.requiresConfirmation, shared: fixedForm.shared || undefined, note: fixedForm.note.trim() || undefined }] });
-        setFixedForm({ name: '', amount: '', category: data.categories[0] || '', paymentMethod: 'credit', requiresConfirmation: false, shared: false, note: '' });
+        save({ ...data, fixedExpenses: [...data.fixedExpenses, { id: Date.now().toString(), name: fixedForm.name.trim(), amount: Number(fixedForm.amount), category: fixedForm.category, paymentMethod: fixedForm.paymentMethod, requiresConfirmation: fixedForm.requiresConfirmation, shared: fixedForm.shared || undefined, frequency: fixedForm.frequency || 'monthly', frequencyMonth: fixedForm.frequencyMonth || 1, note: fixedForm.note.trim() || undefined }] });
+        setFixedForm({ name: '', amount: '', category: data.categories[0] || '', paymentMethod: 'credit', requiresConfirmation: false, shared: false, frequency: 'monthly', frequencyMonth: 1, note: '' });
         setShowAddFixed(false);
       };
       const removeFixed = (id) => save({ ...data, fixedExpenses: data.fixedExpenses.filter(f => f.id !== id) });
@@ -1485,8 +1582,8 @@
         const total = Number(installmentForm.totalPayments);
         if (!installmentForm.name.trim() || !Number(installmentForm.amount) || !total || !installmentForm.startMonth) return;
         const todayStr = formatDate(new Date());
-        save({ ...data, installments: [...data.installments, { id: Date.now().toString(), name: installmentForm.name.trim(), amount: Number(installmentForm.amount), totalPayments: total, startMonth: installmentForm.startMonth, category: installmentForm.category, shared: installmentForm.shared || undefined, sharedDate: installmentForm.shared ? todayStr : undefined, note: installmentForm.note.trim() || undefined }] });
-        setInstallmentForm({ name: '', amount: '', totalPayments: '', startMonth: getMonthKey(new Date()), category: data.categories[0] || '', shared: false, note: '' });
+        save({ ...data, installments: [...data.installments, { id: Date.now().toString(), name: installmentForm.name.trim(), amount: Number(installmentForm.amount), totalPayments: total, startMonth: installmentForm.startMonth, category: installmentForm.category, shared: installmentForm.shared || undefined, sharedDate: installmentForm.shared ? todayStr : undefined, requiresConfirmation: installmentForm.requiresConfirmation || undefined, note: installmentForm.note.trim() || undefined }] });
+        setInstallmentForm({ name: '', amount: '', totalPayments: '', startMonth: getMonthKey(new Date()), category: data.categories[0] || '', shared: false, requiresConfirmation: false, note: '' });
         setShowAddInstallment(false);
       };
       const removeInstallment = (id) => save({ ...data, installments: data.installments.filter(i => i.id !== id) });
@@ -1495,6 +1592,7 @@
         if (i.shared) return { ...i, shared: undefined };
         return { ...i, shared: true, sharedDate: i.sharedDate || formatDate(new Date()) };
       }) });
+      const toggleInstallmentRequiresConfirmation = (id) => save({ ...data, installments: data.installments.map(i => i.id === id ? { ...i, requiresConfirmation: !i.requiresConfirmation } : i) });
 
       const currentMonthKey = getMonthKey(new Date());
 
@@ -1513,12 +1611,23 @@
           <Section title="הוצאות קבועות חודשיות">
             {data.fixedExpenses.length === 0 ? <p className="text-sm text-slate-400 py-3 text-center">לא הוגדרו הוצאות קבועות</p> : (
               <div className="space-y-2 mb-3">
-                {data.fixedExpenses.map(f => (
+                {data.fixedExpenses.map(f => {
+                  const freq = f.frequency || 'monthly';
+                  const fm = f.frequencyMonth || 1;
+                  let freqLabel = null;
+                  if (freq === 'quarterly') {
+                    const months = [0, 3, 6, 9].map(k => hebrewMonthsShort[((fm - 1 + k) % 12)]).join(', ');
+                    freqLabel = 'רבעוני · ' + months;
+                  } else if (freq === 'annual') {
+                    freqLabel = 'שנתי · ' + hebrewMonths[fm - 1];
+                  }
+                  return (
                   <div key={f.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
                     <div className="min-w-0 flex-1">
                       <div className="font-medium text-slate-800 text-sm truncate">{f.name}</div>
                       <div className="text-xs text-slate-500 flex items-center gap-1.5 flex-wrap">
                         <span>{f.category}</span>
+                        {freqLabel && <span className="text-[10px] bg-cyan-100 text-cyan-700 px-1.5 py-0.5 rounded-full">{freqLabel}</span>}
                         {f.requiresConfirmation && <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">דורש אישור</span>}
                         <button onClick={() => toggleFixedShared(f.id)} className={`text-[10px] px-1.5 py-0.5 rounded-full flex items-center gap-1 ${f.shared ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>
                           <Link2 className="w-2.5 h-2.5" />
@@ -1532,10 +1641,11 @@
                       <button onClick={() => removeFixed(f.id)} className="text-slate-400 hover:text-rose-600 p-1"><Trash2 className="w-4 h-4" /></button>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
                 <div className="flex items-center justify-between pt-2 border-t border-slate-200 px-1">
-                  <span className="text-sm text-slate-600">סה״כ קבועות</span>
-                  <span className="font-bold text-slate-800">{formatCurrency(data.fixedExpenses.reduce((s, f) => s + Number(f.amount), 0))}</span>
+                  <span className="text-sm text-slate-600">סה״כ קבועות (חודשיות)</span>
+                  <span className="font-bold text-slate-800">{formatCurrency(data.fixedExpenses.filter(f => (f.frequency || 'monthly') === 'monthly').reduce((s, f) => s + Number(f.amount), 0))}</span>
                 </div>
               </div>
             )}
@@ -1566,6 +1676,52 @@
                     <Wallet className="w-3.5 h-3.5" />מזומן
                   </button>
                 </div>
+                <div className="bg-white border border-slate-200 rounded-lg p-2.5">
+                  <div className="text-xs text-slate-600 mb-2">תדירות התשלום</div>
+                  <div className="grid grid-cols-3 gap-1.5 mb-2">
+                    <button onClick={() => setFixedForm({ ...fixedForm, frequency: 'monthly' })}
+                      className={`py-2 rounded-lg border text-xs font-medium ${(fixedForm.frequency || 'monthly') === 'monthly' ? 'bg-blue-50 border-blue-400 text-blue-700' : 'bg-slate-50 border-slate-200 text-slate-600'}`}>
+                      חודשי
+                    </button>
+                    <button onClick={() => setFixedForm({ ...fixedForm, frequency: 'quarterly', frequencyMonth: fixedForm.frequencyMonth || 1 })}
+                      className={`py-2 rounded-lg border text-xs font-medium ${fixedForm.frequency === 'quarterly' ? 'bg-blue-50 border-blue-400 text-blue-700' : 'bg-slate-50 border-slate-200 text-slate-600'}`}>
+                      רבעוני
+                    </button>
+                    <button onClick={() => setFixedForm({ ...fixedForm, frequency: 'annual', frequencyMonth: fixedForm.frequencyMonth || 1 })}
+                      className={`py-2 rounded-lg border text-xs font-medium ${fixedForm.frequency === 'annual' ? 'bg-blue-50 border-blue-400 text-blue-700' : 'bg-slate-50 border-slate-200 text-slate-600'}`}>
+                      שנתי
+                    </button>
+                  </div>
+                  {fixedForm.frequency === 'quarterly' && (
+                    <>
+                      <div className="text-[11px] text-slate-500 mb-1.5">מתחיל מ:</div>
+                      <select value={fixedForm.frequencyMonth || 1} onChange={(e) => setFixedForm({ ...fixedForm, frequencyMonth: Number(e.target.value) })}
+                        className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 text-xs" style={{ fontFamily: "'Heebo', sans-serif" }}>
+                        {hebrewMonths.map((m, idx) => (
+                          <option key={idx} value={idx + 1}>{m}</option>
+                        ))}
+                      </select>
+                      <div className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">
+                        {(() => {
+                          const fm = fixedForm.frequencyMonth || 1;
+                          const months = [0, 3, 6, 9].map(k => hebrewMonthsShort[((fm - 1 + k) % 12)]).join(', ');
+                          return `יופיע ב: ${months}`;
+                        })()}
+                      </div>
+                    </>
+                  )}
+                  {fixedForm.frequency === 'annual' && (
+                    <>
+                      <div className="text-[11px] text-slate-500 mb-1.5">חודש התשלום:</div>
+                      <select value={fixedForm.frequencyMonth || 1} onChange={(e) => setFixedForm({ ...fixedForm, frequencyMonth: Number(e.target.value) })}
+                        className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 text-xs" style={{ fontFamily: "'Heebo', sans-serif" }}>
+                        {hebrewMonths.map((m, idx) => (
+                          <option key={idx} value={idx + 1}>{m}</option>
+                        ))}
+                      </select>
+                    </>
+                  )}
+                </div>
                 <button onClick={() => setFixedForm({ ...fixedForm, requiresConfirmation: !fixedForm.requiresConfirmation })}
                   className={`w-full flex items-start gap-2.5 p-2.5 rounded-lg border text-right ${fixedForm.requiresConfirmation ? 'bg-amber-50 border-amber-300' : 'bg-white border-slate-200'}`}>
                   <div className={`flex-shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center mt-0.5 ${fixedForm.requiresConfirmation ? 'bg-amber-500 border-amber-500' : 'bg-white border-slate-300'}`}>
@@ -1584,9 +1740,14 @@
                   <div className="flex-1 min-w-0">
                     <div className={`text-sm font-medium ${fixedForm.shared ? 'text-indigo-800' : 'text-slate-700'}`}>גם הוצאה משותפת</div>
                     <div className="text-[11px] text-slate-500">
-                      {fixedForm.amount && Number(fixedForm.amount) > 0
-                        ? `במשותף יופיע ${formatCurrency(Number(fixedForm.amount) * 2)} בכל חודש (כפול 2)`
-                        : 'יופיע אוטומטית במרחב המשותף בכל חודש, עם סכום כפול'}
+                      {(() => {
+                        const freq = fixedForm.frequency || 'monthly';
+                        const freqLabel = freq === 'monthly' ? 'בכל חודש' : freq === 'quarterly' ? 'כל 3 חודשים' : 'פעם בשנה';
+                        if (fixedForm.amount && Number(fixedForm.amount) > 0) {
+                          return `במשותף יופיע ${formatCurrency(Number(fixedForm.amount) * 2)} ${freqLabel} (כפול 2)`;
+                        }
+                        return `יופיע במרחב המשותף ${freqLabel}, עם סכום כפול`;
+                      })()}
                     </div>
                   </div>
                 </button>
@@ -1625,6 +1786,10 @@
                         <div className="font-medium text-slate-800 text-sm truncate">{i.name}</div>
                         <div className="text-xs text-slate-500 flex items-center gap-1.5 flex-wrap">
                           <span>{i.category} · {statusText}</span>
+                          {i.requiresConfirmation && <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">דורש אישור</span>}
+                          <button onClick={() => toggleInstallmentRequiresConfirmation(i.id)} className={`text-[10px] px-1.5 py-0.5 rounded-full ${i.requiresConfirmation ? 'bg-amber-200 text-amber-800 hover:bg-amber-300' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>
+                            {i.requiresConfirmation ? 'ביטול אישור' : 'הוסף אישור'}
+                          </button>
                           <button onClick={() => toggleInstallmentShared(i.id)} className={`text-[10px] px-1.5 py-0.5 rounded-full flex items-center gap-1 ${i.shared ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>
                             <Link2 className="w-2.5 h-2.5" />
                             {i.shared ? 'משותף' : 'לא משותף'}
@@ -1666,6 +1831,16 @@
                   </select>
                   <ChevronDown className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
                 </div>
+                <button onClick={() => setInstallmentForm({ ...installmentForm, requiresConfirmation: !installmentForm.requiresConfirmation })}
+                  className={`w-full flex items-start gap-2.5 p-2.5 rounded-lg border text-right ${installmentForm.requiresConfirmation ? 'bg-amber-50 border-amber-300' : 'bg-white border-slate-200'}`}>
+                  <div className={`flex-shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center mt-0.5 ${installmentForm.requiresConfirmation ? 'bg-amber-500 border-amber-500' : 'bg-white border-slate-300'}`}>
+                    {installmentForm.requiresConfirmation && <Check className="w-3 h-3 text-white" strokeWidth={3} />}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className={`text-sm font-medium ${installmentForm.requiresConfirmation ? 'text-amber-800' : 'text-slate-700'}`}>דורש אישור תשלום ידני</div>
+                    <div className="text-[11px] text-slate-500">התשלום יופיע באפור בכל חודש - סמני ✓ אחרי שהעברת</div>
+                  </div>
+                </button>
                 <button onClick={() => setInstallmentForm({ ...installmentForm, shared: !installmentForm.shared })}
                   className={`w-full flex items-start gap-2.5 p-2.5 rounded-lg border text-right ${installmentForm.shared ? 'bg-indigo-50 border-indigo-300' : 'bg-white border-slate-200'}`}>
                   <div className={`flex-shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center mt-0.5 ${installmentForm.shared ? 'bg-indigo-600 border-indigo-600' : 'bg-white border-slate-300'}`}>
