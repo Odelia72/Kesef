@@ -1056,19 +1056,105 @@
       const now = new Date();
       const currentYear = now.getFullYear();
       const currentMonthKey = getMonthKey(now);
-      const monthExpenses = data.expenses.filter(e => e.date.startsWith(currentMonthKey));
-      const activeFixedCurrent = data.fixedExpenses.filter(f => isFixedActiveInMonth(f, currentMonthKey));
+      const [selectedYear, setSelectedYear] = useState(currentYear);
+      const [categoryRange, setCategoryRange] = useState('month'); // 'month' / 'quarter' / 'year'
+      const [selectedMonth, setSelectedMonth] = useState(now.getMonth()); // 0-11, only when range='month'
+      const [selectedQuarter, setSelectedQuarter] = useState(Math.floor(now.getMonth() / 3)); // 0-3
 
-      const categoryTotals = {};
-      monthExpenses.forEach(e => { categoryTotals[e.category] = (categoryTotals[e.category] || 0) + Number(e.amount); });
-      activeFixedCurrent.forEach(e => { categoryTotals[e.category] = (categoryTotals[e.category] || 0) + Number(e.amount); });
-      data.installments.filter(i => isInstallmentActiveInMonth(i, currentMonthKey)).forEach(i => { categoryTotals[i.category] = (categoryTotals[i.category] || 0) + Number(i.amount); });
+      // Helper: aggregate categories for a set of month keys
+      const aggregateCategoriesForMonths = (monthKeys) => {
+        const totals = {};
+        monthKeys.forEach(mk => {
+          data.expenses.filter(e => e.date.startsWith(mk)).forEach(e => {
+            totals[e.category] = (totals[e.category] || 0) + Number(e.amount);
+          });
+          data.fixedExpenses.filter(f => isFixedActiveInMonth(f, mk)).forEach(f => {
+            totals[f.category] = (totals[f.category] || 0) + Number(f.amount);
+          });
+          data.installments.filter(i => isInstallmentActiveInMonth(i, mk)).forEach(i => {
+            totals[i.category] = (totals[i.category] || 0) + Number(i.amount);
+          });
+        });
+        return totals;
+      };
 
-      const pieData = Object.entries(categoryTotals).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
+      // Build month keys for current selection and previous period (for comparison)
+      const buildMonthKeys = (year, range, monthIdx, quarterIdx) => {
+        if (range === 'year') return Array.from({length: 12}, (_, m) => year + '-' + String(m + 1).padStart(2, '0'));
+        if (range === 'quarter') return [0,1,2].map(o => year + '-' + String(quarterIdx * 3 + o + 1).padStart(2, '0'));
+        return [year + '-' + String(monthIdx + 1).padStart(2, '0')];
+      };
+
+      // Filter to only months in the past or current (for aggregation)
+      const filterPastMonths = (monthKeys) => monthKeys.filter(mk => {
+        const [y, m] = mk.split('-').map(Number);
+        return new Date(y, m - 1, 1) <= now;
+      });
+
+      const currentPeriodKeys = filterPastMonths(buildMonthKeys(selectedYear, categoryRange, selectedMonth, selectedQuarter));
+
+      // Build previous period keys for comparison
+      let prevPeriodKeys = [];
+      let prevPeriodLabel = '';
+      if (categoryRange === 'month') {
+        const prev = new Date(selectedYear, selectedMonth - 1, 1);
+        prevPeriodKeys = [getMonthKey(prev)];
+        prevPeriodLabel = 'חודש קודם';
+      } else if (categoryRange === 'quarter') {
+        let prevQ = selectedQuarter - 1;
+        let prevY = selectedYear;
+        if (prevQ < 0) { prevQ = 3; prevY = selectedYear - 1; }
+        prevPeriodKeys = [0,1,2].map(o => prevY + '-' + String(prevQ * 3 + o + 1).padStart(2, '0'));
+        prevPeriodLabel = 'רבעון קודם';
+      } else {
+        // Year: compare to same period last year (only months that already passed this year)
+        prevPeriodKeys = currentPeriodKeys.map(mk => {
+          const [y, m] = mk.split('-').map(Number);
+          return (y - 1) + '-' + String(m).padStart(2, '0');
+        });
+        prevPeriodLabel = 'שנה שעברה (תקופה מקבילה)';
+      }
+
+      const currentTotals = aggregateCategoriesForMonths(currentPeriodKeys);
+      const prevTotals = aggregateCategoriesForMonths(prevPeriodKeys);
+
+      const pieData = Object.entries(currentTotals).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
+
+      // Find alerts: categories with 15%+ growth, minimum 100 ₪ in current period
+      const alerts = [];
+      Object.entries(currentTotals).forEach(([cat, cur]) => {
+        if (cur < 100) return;
+        const prev = prevTotals[cat] || 0;
+        if (prev === 0) return; // no comparison possible
+        const growth = ((cur - prev) / prev) * 100;
+        if (growth >= 15) alerts.push({ category: cat, current: cur, previous: prev, growth: Math.round(growth) });
+      });
+      alerts.sort((a, b) => b.growth - a.growth);
+
+      // Range label for display
+      const rangeLabel = (() => {
+        if (categoryRange === 'year') return String(selectedYear);
+        if (categoryRange === 'quarter') return 'רבעון ' + (selectedQuarter + 1) + ' · ' + selectedYear;
+        return hebrewMonths[selectedMonth] + ' ' + selectedYear;
+      })();
+
+      // Compute available years from data (past 3 + current + any year with data)
+      const availableYears = (() => {
+        const years = new Set([currentYear, currentYear - 1, currentYear - 2]);
+        data.expenses.forEach(e => { const y = parseInt(e.date.substring(0, 4)); if (y > 0) years.add(y); });
+        (data.incomes || []).forEach(i => { const y = parseInt(i.date.substring(0, 4)); if (y > 0) years.add(y); });
+        return [...years].sort((a, b) => b - a);
+      })();
+
+      // Reset month when changing year (if selected month is future)
+      React.useEffect(() => {
+        if (selectedYear === currentYear && selectedMonth > now.getMonth()) setSelectedMonth(now.getMonth());
+        if (selectedYear === currentYear && selectedQuarter > Math.floor(now.getMonth() / 3)) setSelectedQuarter(Math.floor(now.getMonth() / 3));
+      }, [selectedYear]);
 
       const yearData = [];
       for (let m = 0; m < 12; m++) {
-        const mk = currentYear + '-' + String(m + 1).padStart(2, '0');
+        const mk = selectedYear + '-' + String(m + 1).padStart(2, '0');
         const monthExp = data.expenses.filter(e => e.date.startsWith(mk)).reduce((s, e) => s + Number(e.amount), 0);
         const monthFixed = data.fixedExpenses.filter(f => isFixedActiveInMonth(f, mk)).reduce((s, e) => s + Number(e.amount), 0);
         const inst = data.installments.filter(i => isInstallmentActiveInMonth(i, mk)).reduce((s, i) => s + Number(i.amount), 0);
@@ -1077,8 +1163,8 @@
         yearData.push({ month: hebrewMonthsShort[m], balance: Math.round(data.budget - total + monthInc), expenses: Math.round(total), incomes: Math.round(monthInc) });
       }
 
-      // Cumulative YTD summary through last completed month - simply sum monthly balances
-      const lastCompletedMonthIdx = now.getMonth() - 1; // 0-based; -1 if we're in January
+      // Cumulative YTD summary through last completed month of selectedYear - simply sum monthly balances
+      const lastCompletedMonthIdx = (selectedYear === currentYear) ? now.getMonth() - 1 : 11;
       let ytdSummary = null;
       if (lastCompletedMonthIdx >= 0) {
         const monthsPassed = lastCompletedMonthIdx + 1;
@@ -1096,8 +1182,15 @@
       return (
         <>
           <div className="text-center mb-6">
-            <h1 className="text-3xl font-bold text-slate-800 mb-1">נתונים</h1>
-            <p className="text-sm text-slate-500">{currentYear}</p>
+            <h1 className="text-3xl font-bold text-slate-800 mb-2">נתונים</h1>
+            <div className="inline-flex items-center gap-1 bg-slate-100 rounded-full p-1">
+              {availableYears.map(y => (
+                <button key={y} onClick={() => setSelectedYear(y)}
+                  className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${selectedYear === y ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500'}`}>
+                  {y}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="grid grid-cols-2 gap-1 bg-slate-100 rounded-2xl p-1 mb-5">
@@ -1116,9 +1209,47 @@
           {subTab === 'archive' ? <ArchiveView data={data} />
           : (<>
           <div className="bg-white/80 backdrop-blur rounded-3xl p-5 shadow-sm border border-slate-200/50 mb-4">
-            <h2 className="text-lg font-bold text-slate-800 mb-1">חלוקה לקטגוריות</h2>
-            <p className="text-xs text-slate-500 mb-4">{hebrewMonths[now.getMonth()]}</p>
-            {pieData.length === 0 ? <p className="text-center text-slate-400 py-12">אין עדיין הוצאות החודש</p> : (
+            <div className="flex items-start justify-between gap-2 flex-wrap mb-2">
+              <h2 className="text-lg font-bold text-slate-800">חלוקה לקטגוריות</h2>
+            </div>
+            <div className="grid grid-cols-3 gap-1 bg-slate-100 rounded-xl p-1 mb-3">
+              <button onClick={() => setCategoryRange('month')}
+                className={`py-1.5 rounded-lg text-xs font-medium transition-all ${categoryRange === 'month' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500'}`}>
+                חודשי
+              </button>
+              <button onClick={() => setCategoryRange('quarter')}
+                className={`py-1.5 rounded-lg text-xs font-medium transition-all ${categoryRange === 'quarter' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500'}`}>
+                רבעוני
+              </button>
+              <button onClick={() => setCategoryRange('year')}
+                className={`py-1.5 rounded-lg text-xs font-medium transition-all ${categoryRange === 'year' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500'}`}>
+                שנתי
+              </button>
+            </div>
+            {categoryRange === 'month' && (
+              <div className="mb-3">
+                <select value={selectedMonth} onChange={(e) => setSelectedMonth(Number(e.target.value))}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 text-sm" style={{ fontFamily: "'Heebo', sans-serif" }}>
+                  {hebrewMonths.map((m, i) => {
+                    const isFuture = selectedYear === currentYear && i > now.getMonth();
+                    return <option key={i} value={i} disabled={isFuture}>{m} {selectedYear}{isFuture ? ' (עתידי)' : ''}</option>;
+                  })}
+                </select>
+              </div>
+            )}
+            {categoryRange === 'quarter' && (
+              <div className="mb-3">
+                <select value={selectedQuarter} onChange={(e) => setSelectedQuarter(Number(e.target.value))}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 text-sm" style={{ fontFamily: "'Heebo', sans-serif" }}>
+                  {[0,1,2,3].map(q => {
+                    const isFuture = selectedYear === currentYear && q > Math.floor(now.getMonth() / 3);
+                    return <option key={q} value={q} disabled={isFuture}>רבעון {q + 1} · {hebrewMonthsShort[q * 3]}-{hebrewMonthsShort[q * 3 + 2]} {selectedYear}{isFuture ? ' (עתידי)' : ''}</option>;
+                  })}
+                </select>
+              </div>
+            )}
+            <p className="text-xs text-slate-500 mb-4">{rangeLabel}</p>
+            {pieData.length === 0 ? <p className="text-center text-slate-400 py-12">אין הוצאות בתקופה זו</p> : (
               <>
                 <div className="h-64">
                   <ResponsiveContainer width="100%" height="100%">
@@ -1141,12 +1272,37 @@
                     </div>
                   ))}
                 </div>
+
+                {alerts.length > 0 && (
+                  <div className="mt-5 bg-amber-50/70 border border-amber-200 rounded-2xl p-4">
+                    <div className="flex items-center gap-2 mb-2">
+                      <AlertTriangle className="w-4 h-4 text-amber-600" />
+                      <h3 className="font-bold text-amber-900 text-sm">שים לב · עליות משמעותיות</h3>
+                    </div>
+                    <p className="text-[11px] text-amber-800/80 mb-3">בהשוואה ל{prevPeriodLabel}, עלייה של 15% ומעלה בקטגוריות עם הוצאה מעל 100 ₪</p>
+                    <div className="space-y-2">
+                      {alerts.map(a => (
+                        <div key={a.category} className="bg-white/70 rounded-xl p-2.5">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="font-medium text-slate-800 text-sm">{a.category}</span>
+                            <span className="text-sm font-bold text-amber-700">+{a.growth}%</span>
+                          </div>
+                          <div className="text-[11px] text-slate-500 flex items-center gap-2">
+                            <span>עכשיו: <span className="font-medium text-slate-700">{formatCurrency(a.current)}</span></span>
+                            <span className="text-slate-300">·</span>
+                            <span>{prevPeriodLabel}: <span className="font-medium text-slate-700">{formatCurrency(a.previous)}</span></span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </>
             )}
           </div>
 
           <div className="bg-white/80 backdrop-blur rounded-3xl p-5 shadow-sm border border-slate-200/50 mb-4">
-            <h2 className="text-lg font-bold text-slate-800 mb-1">יתרה שנתית</h2>
+            <h2 className="text-lg font-bold text-slate-800 mb-1">יתרה שנתית · {selectedYear}</h2>
             <p className="text-xs text-slate-500 mb-4">חיובי = נשאר תקציב · שלילי = חריגה</p>
 
             {ytdSummary && (
