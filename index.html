@@ -1077,22 +1077,19 @@
         yearData.push({ month: hebrewMonthsShort[m], balance: Math.round(data.budget - total + monthInc), expenses: Math.round(total), incomes: Math.round(monthInc) });
       }
 
-      // Cumulative YTD summary through last completed month
+      // Cumulative YTD summary through last completed month - simply sum monthly balances
       const lastCompletedMonthIdx = now.getMonth() - 1; // 0-based; -1 if we're in January
       let ytdSummary = null;
       if (lastCompletedMonthIdx >= 0) {
         const monthsPassed = lastCompletedMonthIdx + 1;
-        const cumBudget = data.budget * monthsPassed;
-        let cumSpent = 0;
+        let cumBalance = 0;
         for (let m = 0; m <= lastCompletedMonthIdx; m++) {
-          cumSpent += yearData[m].expenses;
+          cumBalance += yearData[m].balance;
         }
         ytdSummary = {
           monthName: hebrewMonths[lastCompletedMonthIdx],
           monthsPassed,
-          cumBudget,
-          cumSpent,
-          balance: cumBudget - cumSpent,
+          balance: cumBalance,
         };
       }
 
@@ -1154,21 +1151,11 @@
 
             {ytdSummary && (
               <div className={`rounded-2xl p-4 mb-4 border ${ytdSummary.balance >= 0 ? 'bg-blue-50/70 border-blue-200' : 'bg-rose-50/70 border-rose-200'}`}>
-                <div className="text-xs text-slate-600 mb-1">מצטבר עד סוף {ytdSummary.monthName}</div>
-                <div className={`text-3xl font-bold mb-2 ${ytdSummary.balance >= 0 ? 'text-blue-700' : 'text-rose-700'}`}>
+                <div className="text-xs text-slate-600 mb-1">סה״כ יתרה מצטברת עד סוף {ytdSummary.monthName}</div>
+                <div className={`text-3xl font-bold mb-1 ${ytdSummary.balance >= 0 ? 'text-blue-700' : 'text-rose-700'}`}>
                   {ytdSummary.balance >= 0 ? '+' : ''}{formatCurrency(ytdSummary.balance)}
                 </div>
-                <div className="grid grid-cols-2 gap-3 text-xs">
-                  <div>
-                    <div className="text-slate-500">תקציב מצטבר</div>
-                    <div className="font-medium text-slate-700">{formatCurrency(ytdSummary.cumBudget)}</div>
-                    <div className="text-[10px] text-slate-400">{ytdSummary.monthsPassed} × {formatCurrency(data.budget)}</div>
-                  </div>
-                  <div>
-                    <div className="text-slate-500">הוצאת בפועל</div>
-                    <div className="font-medium text-slate-700">{formatCurrency(ytdSummary.cumSpent)}</div>
-                  </div>
-                </div>
+                <div className="text-[11px] text-slate-500">סכום היתרות של {ytdSummary.monthsPassed} החודשים שהסתיימו</div>
               </div>
             )}
 
