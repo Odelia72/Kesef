@@ -1139,16 +1139,25 @@
 
       const pieData = Object.entries(currentTotals).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
 
-      // Find alerts: categories with 15%+ growth, minimum 100 ₪ in current period
+      // Find alerts: categories with 15%+ growth (rises), minimum 100 ₪ in current period
+      // And improvements: categories with 15%+ decrease, minimum 100 ₪ in previous period (so drop is meaningful)
       const alerts = [];
-      Object.entries(currentTotals).forEach(([cat, cur]) => {
-        if (cur < 100) return;
+      const improvements = [];
+      // Union of categories in current or previous
+      const allCats = new Set([...Object.keys(currentTotals), ...Object.keys(prevTotals)]);
+      allCats.forEach(cat => {
+        const cur = currentTotals[cat] || 0;
         const prev = prevTotals[cat] || 0;
         if (prev === 0) return; // no comparison possible
-        const growth = ((cur - prev) / prev) * 100;
-        if (growth >= 15) alerts.push({ category: cat, current: cur, previous: prev, growth: Math.round(growth) });
+        const change = ((cur - prev) / prev) * 100;
+        if (change >= 15 && cur >= 100) {
+          alerts.push({ category: cat, current: cur, previous: prev, growth: Math.round(change) });
+        } else if (change <= -15 && prev >= 100) {
+          improvements.push({ category: cat, current: cur, previous: prev, decrease: Math.round(Math.abs(change)) });
+        }
       });
       alerts.sort((a, b) => b.growth - a.growth);
+      improvements.sort((a, b) => b.decrease - a.decrease);
 
       // Range label for display
       const rangeLabel = (() => {
@@ -1309,6 +1318,35 @@
                               <ChevronLeft className="w-3 h-3 text-slate-400" />
                             </span>
                             <span className="text-sm font-bold text-amber-700">+{a.growth}%</span>
+                          </div>
+                          <div className="text-[11px] text-slate-500 flex items-center gap-2">
+                            <span>עכשיו: <span className="font-medium text-slate-700">{formatCurrency(a.current)}</span></span>
+                            <span className="text-slate-300">·</span>
+                            <span>{prevPeriodLabel}: <span className="font-medium text-slate-700">{formatCurrency(a.previous)}</span></span>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {improvements.length > 0 && (
+                  <div className="mt-3 bg-emerald-50/70 border border-emerald-200 rounded-2xl p-4">
+                    <div className="flex items-center gap-2 mb-2">
+                      <TrendingUp className="w-4 h-4 text-emerald-600" style={{ transform: 'scaleY(-1)' }} />
+                      <h3 className="font-bold text-emerald-900 text-sm">כל הכבוד · ירידות משמעותיות</h3>
+                    </div>
+                    <p className="text-[11px] text-emerald-800/80 mb-3">בהשוואה ל{prevPeriodLabel}, ירידה של 15% ומעלה</p>
+                    <div className="space-y-2">
+                      {improvements.map(a => (
+                        <button key={a.category} onClick={() => setComparisonCategory(a.category)}
+                          className="w-full text-right bg-white/70 hover:bg-white active:scale-[0.99] rounded-xl p-2.5 transition-all">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="font-medium text-slate-800 text-sm flex items-center gap-1.5">
+                              {a.category}
+                              <ChevronLeft className="w-3 h-3 text-slate-400" />
+                            </span>
+                            <span className="text-sm font-bold text-emerald-700">-{a.decrease}%</span>
                           </div>
                           <div className="text-[11px] text-slate-500 flex items-center gap-2">
                             <span>עכשיו: <span className="font-medium text-slate-700">{formatCurrency(a.current)}</span></span>
